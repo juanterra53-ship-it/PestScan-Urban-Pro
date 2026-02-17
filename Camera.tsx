@@ -37,7 +37,7 @@ export default function Camera() {
       return;
     }
 
-    const capabilities = track.getCapabilities();
+    const capabilities = track.getCapabilities() as any;
 
     if (!capabilities.torch) {
       alert("Flash não suportado neste dispositivo");
@@ -46,9 +46,9 @@ export default function Camera() {
 
     const newState = !flashOn;
 
-    await track.applyConstraints({
-      advanced: [{ torch: newState }]
-    });
+    await (track as any).applyConstraints({
+  advanced: [{ torch: newState }] as any
+});
 
     setFlashOn(newState);
 
