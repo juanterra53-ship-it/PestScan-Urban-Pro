@@ -37,20 +37,20 @@ export default function Camera() {
       return;
     }
 
-    const capabilities = track.getCapabilities() as any;
+    const capabilities: any = track.getCapabilities();
 
-    if (!capabilities.torch) {
-      alert("Flash não suportado neste dispositivo");
-      return;
-    }
+if (!capabilities.torch) {
+  alert("Flash não suportado neste dispositivo");
+  return;
+}
 
-    const newState = !flashOn;
+const newState = !flashOn;
 
-    await (track as any).applyConstraints({
+await (track as any).applyConstraints({
   advanced: [{ torch: newState }] as any
 });
 
-    setFlashOn(newState);
+setFlashOn(newState);
 
   } catch (err) {
     console.error("Erro ao alternar flash:", err);
