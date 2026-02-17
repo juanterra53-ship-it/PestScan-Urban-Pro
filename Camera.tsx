@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
+interface MediaTrackCapabilitiesWithTorch extends MediaTrackCapabilities {
+  torch?: boolean;
+}
+
 export default function Camera() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [track, setTrack] = useState<MediaStreamTrack | null>(null);
@@ -29,33 +33,33 @@ export default function Camera() {
   }, []);
 
   const toggleFlash = async () => {
-  if (!track) return;
+    if (!track) return;
 
-  try {
-    if (typeof track.getCapabilities !== "function") {
-      alert("Flash não suportado neste dispositivo");
-      return;
+    try {
+      if (typeof track.getCapabilities !== "function") {
+        alert("Flash não suportado neste dispositivo");
+        return;
+      }
+
+      const capabilities =
+        track.getCapabilities() as MediaTrackCapabilitiesWithTorch;
+
+      if (!capabilities.torch) {
+        alert("Flash não suportado neste dispositivo");
+        return;
+      }
+
+      const newState = !flashOn;
+
+      await track.applyConstraints({
+        advanced: [{ torch: newState } as any]
+      });
+
+      setFlashOn(newState);
+    } catch (err) {
+      console.error("Erro ao alternar flash:", err);
     }
-
-    const capabilities: any = track.getCapabilities();
-
-if (!capabilities.torch) {
-  alert("Flash não suportado neste dispositivo");
-  return;
-}
-
-const newState = !flashOn;
-
-await (track as any).applyConstraints({
-  advanced: [{ torch: newState }] as any
-});
-
-setFlashOn(newState);
-
-  } catch (err) {
-    console.error("Erro ao alternar flash:", err);
-  }
-};
+  };
 
   return (
     <div>
