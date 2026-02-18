@@ -1,19 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
 
-
-
 export default function Camera() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [track, setTrack] = useState<MediaStreamTrack | null>(null);
   const [flashOn, setFlashOn] = useState(false);
 
   useEffect(() => {
+    let currentTrack: MediaStreamTrack | null = null;
+
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: { exact: "environment" }
-
+            facingMode: "environment"
           }
         });
 
@@ -22,10 +21,8 @@ export default function Camera() {
         }
 
         const videoTrack = stream.getVideoTracks()[0];
+        currentTrack = videoTrack;
         setTrack(videoTrack);
-        
-        const capabilities = videoTrack.getCapabilities();
-console.log("CAPABILITIES:", capabilities);
 
       } catch (error) {
         console.error("Erro ao acessar câmera:", error);
@@ -35,9 +32,8 @@ console.log("CAPABILITIES:", capabilities);
     startCamera();
 
     return () => {
-      if (videoRef.current?.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((t) => t.stop());
+      if (currentTrack) {
+        currentTrack.stop();
       }
     };
   }, []);
@@ -46,56 +42,43 @@ console.log("CAPABILITIES:", capabilities);
     if (!track) return;
 
     try {
-      const videoTrack: any = track;
+      const capabilities = track.getCapabilities();
 
-      if (!videoTrack.getCapabilities) {
+      if (!("torch" in capabilities)) {
         alert("Flash não suportado neste dispositivo");
         return;
       }
 
-      const capabilities = videoTrack.getCapabilities();
-
-      if (!capabilities?.torch) {
-        alert("Flash não suportado neste dispositivo");
-        return;
-      }
-
-      const newState = !flashOn;
-
-      await videoTrack.applyConstraints({
-        advanced: [{ torch: newState }]
+      await track.applyConstraints({
+        advanced: [{ torch: !flashOn }]
       });
 
-      setFlashOn(newState);
-    } catch (err) {
-      console.error("Erro ao alternar flash:", err);
+      setFlashOn(!flashOn);
+
+    } catch (error) {
+      console.error("Erro ao ativar flash:", error);
     }
   };
 
   return (
-    <div>
+    <div className="relative w-full max-w-md mx-auto">
+
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        style={{ width: "100%", borderRadius: "12px" }}
+        className="w-full rounded-3xl shadow-lg"
       />
 
+      {/* BOTÃO FLASH */}
       <button
         onClick={toggleFlash}
-        style={{
-          marginTop: "10px",
-          padding: "12px",
-          width: "100%",
-          background: flashOn ? "#444" : "#111",
-          color: "#fff",
-          borderRadius: "8px",
-          border: "none",
-          fontWeight: "bold"
-        }}
+        className={`absolute top-4 right-4 p-3 rounded-full text-xl shadow-lg transition-all duration-300
+        ${flashOn ? "bg-yellow-400 text-black scale-110" : "bg-black/60 text-white"}`}
       >
-        {flashOn ? "Desligar Flash 🔦" : "Ligar Flash 🔦"}
+        ⚡
       </button>
+
     </div>
   );
 }
