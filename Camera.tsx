@@ -3,13 +3,15 @@ import React, { useEffect, useRef, useState } from "react";
 const Camera: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-
-  const [flashOn, setFlashOn] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [flashOn, setFlashOn] = useState(false);
 
   useEffect(() => {
     startCamera();
-    return () => stopCamera();
+
+    return () => {
+      stopCamera();
+    };
   }, []);
 
   const startCamera = async () => {
@@ -34,7 +36,7 @@ const Camera: React.FC = () => {
 
   const stopCamera = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach((track) => track.stop());
     }
   };
 
@@ -100,17 +102,16 @@ const Camera: React.FC = () => {
           position: "absolute",
           top: 20,
           right: 20,
-          zIndex: 1000,
-          padding: "12px 18px",
-          fontSize: 16,
-          borderRadius: 10,
+          padding: "14px",
+          fontSize: "22px",
+          borderRadius: "50%",
           border: "none",
-          backgroundColor: flashOn ? "#FFD700" : "#333",
-          color: "white",
-          cursor: "pointer"
+          backgroundColor: flashOn ? "orange" : "yellow",
+          cursor: "pointer",
+          zIndex: 1000
         }}
       >
-        {flashOn ? "🔦 Flash ON" : "🔦 Flash OFF"}
+        ⚡
       </button>
     </div>
   );
