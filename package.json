@@ -1,23 +1,13 @@
-{
-  "name": "pestscan-pro",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite --host",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
+"dependencies": {
   "@google/genai": "^1.38.0",
   "@supabase/supabase-js": "^2.39.0",
   "lucide-react": "^0.408.0",
-  "react": "^18.2.0",
-  "react-dom": "^18.2.0"
+  "react": "18.2.0",
+  "react-dom": "18.2.0"
 },
 "devDependencies": {
-  "@types/react": "^18.2.0",
-  "@types/react-dom": "^18.2.0",
+  "@types/react": "18.2.66",
+  "@types/react-dom": "18.2.22",
   "@vitejs/plugin-react": "^4.3.1",
   "typescript": "^5.5.4",
   "vite": "^5.4.2"
