@@ -1,101 +1,88 @@
 import React, { useEffect, useRef, useState } from "react";
 
-
-
 export default function Camera() {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [track, setTrack] = useState<MediaStreamTrack | null>(null);
+  const videoRef = useRef(null);
+  const [stream, setStream] = useState(null);
   const [flashOn, setFlashOn] = useState(false);
 
   useEffect(() => {
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { exact: "environment" }
-
-          }
-        });
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-
-        const videoTrack = stream.getVideoTracks()[0];
-        setTrack(videoTrack);
-        
-        const capabilities = videoTrack.getCapabilities();
-console.log("CAPABILITIES:", capabilities);
-
-      } catch (error) {
-        console.error("Erro ao acessar câmera:", error);
-      }
-    }
-
     startCamera();
-
-    return () => {
-      if (videoRef.current?.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((t) => t.stop());
-      }
-    };
   }, []);
 
-  const toggleFlash = async () => {
-    if (!track) return;
-
+  const startCamera = async () => {
     try {
-      const videoTrack: any = track;
-
-      if (!videoTrack.getCapabilities) {
-        alert("Flash não suportado neste dispositivo");
-        return;
-      }
-
-      const capabilities = videoTrack.getCapabilities();
-
-      if (!capabilities?.torch) {
-        alert("Flash não suportado neste dispositivo");
-        return;
-      }
-
-      const newState = !flashOn;
-
-      await videoTrack.applyConstraints({
-        advanced: [{ torch: newState }]
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" }
       });
 
-      setFlashOn(newState);
-    } catch (err) {
-      console.error("Erro ao alternar flash:", err);
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream;
+      }
+
+      setStream(mediaStream);
+    } catch (error) {
+      console.error(error);
     }
   };
 
+  const toggleFlash = async () => {
+    alert("Botão apareceu ✔"); // TESTE VISUAL
+
+    if (!stream) return;
+
+    const track = stream.getVideoTracks()[0];
+    const capabilities = track.getCapabilities();
+
+    if (!capabilities.torch) {
+      alert("Flash não suportado");
+      return;
+    }
+
+    await track.applyConstraints({
+      advanced: [{ torch: !flashOn }]
+    });
+
+    setFlashOn(!flashOn);
+  };
+
   return (
-    <div>
+    <div style={{
+      position: "relative",
+      width: "100%",
+      height: "100vh",
+      backgroundColor: "black"
+    }}>
+      
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        style={{ width: "100%", borderRadius: "12px" }}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "cover"
+        }}
       />
 
+      {/* BOTÃO SUPER VISÍVEL */}
       <button
         onClick={toggleFlash}
         style={{
-          marginTop: "10px",
-          padding: "12px",
-          width: "100%",
-          background: flashOn ? "#444" : "#111",
-          color: "#fff",
-          borderRadius: "8px",
-          border: "none",
-          fontWeight: "bold"
+          position: "absolute",
+          top: 50,
+          right: 50,
+          width: 100,
+          height: 100,
+          backgroundColor: "red",
+          color: "white",
+          fontSize: 30,
+          zIndex: 9999,
+          borderRadius: "50%"
         }}
       >
-        {flashOn ? "Desligar Flash 🔦" : "Ligar Flash 🔦"}
+        FLASH
       </button>
+
     </div>
   );
 }
