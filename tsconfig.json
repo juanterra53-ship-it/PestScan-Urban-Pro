@@ -16,5 +16,6 @@
     "strict": false,
     "types": ["react", "react-dom"]
   },
-  "include": ["src"]
+  "include": ["**/*.ts", "**/*.tsx"]
+
 }
