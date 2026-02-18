@@ -1,5 +1,5 @@
-import React from "react";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+
 
 
 export default function Camera() {
@@ -12,7 +12,8 @@ export default function Camera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: { ideal: "environment" }
+            facingMode: { exact: "environment" }
+
           }
         });
 
@@ -22,6 +23,10 @@ export default function Camera() {
 
         const videoTrack = stream.getVideoTracks()[0];
         setTrack(videoTrack);
+        
+        const capabilities = videoTrack.getCapabilities();
+console.log("CAPABILITIES:", capabilities);
+
       } catch (error) {
         console.error("Erro ao acessar câmera:", error);
       }
