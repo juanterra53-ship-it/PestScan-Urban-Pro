@@ -3,8 +3,10 @@ import React, { useEffect, useRef, useState } from "react";
 const Camera: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
   const [error, setError] = useState<string | null>(null);
   const [flashOn, setFlashOn] = useState(false);
+  const [torchSupported, setTorchSupported] = useState(false);
 
   useEffect(() => {
     startCamera();
@@ -28,6 +30,17 @@ const Camera: React.FC = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
+
+      // Verifica suporte a flash
+      const track = stream.getVideoTracks()[0];
+
+      // @ts-ignore
+      const capabilities = track.getCapabilities?.();
+
+      if (capabilities && capabilities.torch) {
+        setTorchSupported(true);
+      }
+
     } catch (err) {
       console.error(err);
       setError("Erro ao acessar câmera");
@@ -36,7 +49,7 @@ const Camera: React.FC = () => {
 
   const stopCamera = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current.getTracks().forEach(track => track.stop());
     }
   };
 
@@ -53,6 +66,7 @@ const Camera: React.FC = () => {
         await track.applyConstraints({
           advanced: [{ torch: !flashOn }]
         });
+
         setFlashOn(!flashOn);
       } catch (err) {
         console.error("Erro ao ativar flash:", err);
@@ -68,7 +82,8 @@ const Camera: React.FC = () => {
         position: "relative",
         width: "100%",
         height: "100vh",
-        backgroundColor: "black"
+        backgroundColor: "black",
+        overflow: "hidden"
       }}
     >
       {error && (
@@ -90,29 +105,34 @@ const Camera: React.FC = () => {
         autoPlay
         playsInline
         style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
           width: "100%",
           height: "100%",
           objectFit: "cover"
         }}
       />
 
-      <button
-        onClick={toggleFlash}
-        style={{
-          position: "absolute",
-          top: 20,
-          right: 20,
-          padding: "14px",
-          fontSize: "22px",
-          borderRadius: "50%",
-          border: "none",
-          backgroundColor: flashOn ? "orange" : "yellow",
-          cursor: "pointer",
-          zIndex: 1000
-        }}
-      >
-        ⚡
-      </button>
+      {torchSupported && (
+        <button
+          onClick={toggleFlash}
+          style={{
+            position: "absolute",
+            top: 20,
+            right: 20,
+            padding: "16px",
+            fontSize: "24px",
+            borderRadius: "50%",
+            border: "none",
+            backgroundColor: flashOn ? "orange" : "yellow",
+            cursor: "pointer",
+            zIndex: 2000
+          }}
+        >
+          ⚡
+        </button>
+      )}
     </div>
   );
 };
