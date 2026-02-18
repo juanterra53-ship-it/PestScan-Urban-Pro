@@ -9,10 +9,7 @@ const Camera: React.FC = () => {
 
   useEffect(() => {
     startCamera();
-
-    return () => {
-      stopCamera();
-    };
+    return () => stopCamera();
   }, []);
 
   const startCamera = async () => {
@@ -30,8 +27,8 @@ const Camera: React.FC = () => {
         videoRef.current.srcObject = stream;
       }
     } catch (err) {
-      setError("Erro ao acessar a câmera");
       console.error(err);
+      setError("Erro ao acessar câmera");
     }
   };
 
@@ -47,9 +44,9 @@ const Camera: React.FC = () => {
     const track = streamRef.current.getVideoTracks()[0];
 
     // @ts-ignore
-    const capabilities = track.getCapabilities();
+    const capabilities = track.getCapabilities?.();
 
-    if (capabilities.torch) {
+    if (capabilities && capabilities.torch) {
       try {
         await track.applyConstraints({
           advanced: [{ torch: !flashOn }]
@@ -64,10 +61,24 @@ const Camera: React.FC = () => {
   };
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100vh", background: "#000" }}>
-      
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "100vh",
+        backgroundColor: "black"
+      }}
+    >
       {error && (
-        <div style={{ color: "red", position: "absolute", top: 10, left: 10 }}>
+        <div
+          style={{
+            color: "red",
+            position: "absolute",
+            top: 10,
+            left: 10,
+            zIndex: 1000
+          }}
+        >
           {error}
         </div>
       )}
@@ -76,7 +87,11 @@ const Camera: React.FC = () => {
         ref={videoRef}
         autoPlay
         playsInline
-        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "cover"
+        }}
       />
 
       <button
@@ -85,19 +100,18 @@ const Camera: React.FC = () => {
           position: "absolute",
           top: 20,
           right: 20,
-          zIndex: 999,
-          padding: "10px 15px",
-          backgroundColor: flashOn ? "#ffd700" : "#333",
-          color: "#fff",
-          border: "none",
-          borderRadius: 8,
+          zIndex: 1000,
+          padding: "12px 18px",
           fontSize: 16,
+          borderRadius: 10,
+          border: "none",
+          backgroundColor: flashOn ? "#FFD700" : "#333",
+          color: "white",
           cursor: "pointer"
         }}
       >
         {flashOn ? "🔦 Flash ON" : "🔦 Flash OFF"}
       </button>
-
     </div>
   );
 };
