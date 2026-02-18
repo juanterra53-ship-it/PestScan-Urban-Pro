@@ -1,29 +1,33 @@
+const [flashOn, setFlashOn] = useState(false);
+const videoRef = useRef<HTMLVideoElement>(null);
+const streamRef = useRef<MediaStream | null>(null);
+
+const startCamera = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "environment" }
+  });
+
+  streamRef.current = stream;
+
+  if (videoRef.current) {
+    videoRef.current.srcObject = stream;
+  }
+};
+
 const toggleFlash = async () => {
-  if (!track) return;
+  if (!streamRef.current) return;
 
-  try {
-    const videoTrack: any = track;
+  const track = streamRef.current.getVideoTracks()[0];
 
-    if (!videoTrack.getCapabilities) {
-      alert("Flash não suportado neste dispositivo");
-      return;
-    }
+  const capabilities = track.getCapabilities();
 
-    const capabilities = videoTrack.getCapabilities();
-
-    if (!capabilities || !capabilities.torch) {
-      alert("Flash não suportado neste dispositivo");
-      return;
-    }
-
-    const newState = !flashOn;
-
-    await videoTrack.applyConstraints({
-      advanced: [{ torch: newState }]
+  if (capabilities.torch) {
+    await track.applyConstraints({
+      advanced: [{ torch: !flashOn }]
     });
 
-    setFlashOn(newState);
-  } catch (err) {
-    console.error("Erro ao alternar flash:", err);
+    setFlashOn(!flashOn);
+  } else {
+    alert("Flash não suportado neste dispositivo.");
   }
 };
