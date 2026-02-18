@@ -1,33 +1,94 @@
-const [flashOn, setFlashOn] = useState(false);
-const videoRef = useRef<HTMLVideoElement>(null);
-const streamRef = useRef<MediaStream | null>(null);
+import React, { useEffect, useRef, useState } from "react";
 
-const startCamera = async () => {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "environment" }
-  });
+export default function Camera() {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [track, setTrack] = useState<MediaStreamTrack | null>(null);
+  const [flashOn, setFlashOn] = useState(false);
 
-  streamRef.current = stream;
+  useEffect(() => {
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" }
+          }
+        });
 
-  if (videoRef.current) {
-    videoRef.current.srcObject = stream;
-  }
-};
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
 
-const toggleFlash = async () => {
-  if (!streamRef.current) return;
+        const videoTrack = stream.getVideoTracks()[0];
+        setTrack(videoTrack);
+      } catch (error) {
+        console.error("Erro ao acessar câmera:", error);
+      }
+    }
 
-  const track = streamRef.current.getVideoTracks()[0];
+    startCamera();
 
-  const capabilities = track.getCapabilities();
+    return () => {
+      if (videoRef.current?.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
 
-  if (capabilities.torch) {
-    await track.applyConstraints({
-      advanced: [{ torch: !flashOn }]
-    });
+  const toggleFlash = async () => {
+    if (!track) return;
 
-    setFlashOn(!flashOn);
-  } else {
-    alert("Flash não suportado neste dispositivo.");
-  }
-};
+    try {
+      const videoTrack: any = track;
+
+      if (!videoTrack.getCapabilities) {
+        alert("Flash não suportado neste dispositivo");
+        return;
+      }
+
+      const capabilities = videoTrack.getCapabilities();
+
+      if (!capabilities?.torch) {
+        alert("Flash não suportado neste dispositivo");
+        return;
+      }
+
+      const newState = !flashOn;
+
+      await videoTrack.applyConstraints({
+        advanced: [{ torch: newState }]
+      });
+
+      setFlashOn(newState);
+    } catch (err) {
+      console.error("Erro ao alternar flash:", err);
+    }
+  };
+
+  return (
+    <div>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        style={{ width: "100%", borderRadius: "12px" }}
+      />
+
+      <button
+        onClick={toggleFlash}
+        style={{
+          marginTop: "10px",
+          padding: "12px",
+          width: "100%",
+          background: flashOn ? "#444" : "#111",
+          color: "#fff",
+          borderRadius: "8px",
+          border: "none",
+          fontWeight: "bold"
+        }}
+      >
+        {flashOn ? "Desligar Flash 🔦" : "Ligar Flash 🔦"}
+      </button>
+    </div>
+  );
+}
