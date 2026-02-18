@@ -41,25 +41,28 @@ export default function Camera() {
         return;
       }
 
-      const capabilities =
-        track.getCapabilities() as MediaTrackCapabilitiesWithTorch;
+      const toggleFlash = async () => {
+  if (!track) return;
 
-      if (!capabilities.torch) {
-        alert("Flash não suportado neste dispositivo");
-        return;
-      }
+  try {
+    const capabilities = (track as any).getCapabilities?.();
 
-      const newState = !flashOn;
-
-      await track.applyConstraints({
-        advanced: [{ torch: newState } as any]
-      });
-
-      setFlashOn(newState);
-    } catch (err) {
-      console.error("Erro ao alternar flash:", err);
+    if (!capabilities?.torch) {
+      alert("Flash não suportado neste dispositivo");
+      return;
     }
-  };
+
+    const newState = !flashOn;
+
+    await (track as any).applyConstraints({
+      advanced: [{ torch: newState }]
+    });
+
+    setFlashOn(newState);
+  } catch (err) {
+    console.error("Erro ao alternar flash:", err);
+  }
+};
 
   return (
     <div>
