@@ -1,60 +1,24 @@
-import { useEffect, useRef, useState } from "react";
-
-interface MediaTrackCapabilitiesWithTorch extends MediaTrackCapabilities {
-  torch?: boolean;
-}
-
-export default function Camera() {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [track, setTrack] = useState<MediaStreamTrack | null>(null);
-  const [flashOn, setFlashOn] = useState(false);
-
-  useEffect(() => {
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" }
-          }
-        });
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-
-        const videoTrack = stream.getVideoTracks()[0];
-        setTrack(videoTrack);
-      } catch (error) {
-        console.error("Erro ao acessar câmera:", error);
-      }
-    }
-
-    startCamera();
-  }, []);
-
-  const toggleFlash = async () => {
-    if (!track) return;
-
-    try {
-      if (typeof track.getCapabilities !== "function") {
-        alert("Flash não suportado neste dispositivo");
-        return;
-      }
-
-      const toggleFlash = async () => {
+const toggleFlash = async () => {
   if (!track) return;
 
   try {
-    const capabilities = (track as any).getCapabilities?.();
+    const videoTrack: any = track;
 
-    if (!capabilities?.torch) {
+    if (!videoTrack.getCapabilities) {
+      alert("Flash não suportado neste dispositivo");
+      return;
+    }
+
+    const capabilities = videoTrack.getCapabilities();
+
+    if (!capabilities || !capabilities.torch) {
       alert("Flash não suportado neste dispositivo");
       return;
     }
 
     const newState = !flashOn;
 
-    await (track as any).applyConstraints({
+    await videoTrack.applyConstraints({
       advanced: [{ torch: newState }]
     });
 
@@ -63,28 +27,3 @@ export default function Camera() {
     console.error("Erro ao alternar flash:", err);
   }
 };
-
-  return (
-    <div>
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        style={{ width: "100%", borderRadius: "12px" }}
-      />
-      <button
-        onClick={toggleFlash}
-        style={{
-          marginTop: "10px",
-          padding: "10px",
-          width: "100%",
-          background: "#111",
-          color: "#fff",
-          borderRadius: "8px"
-        }}
-      >
-        {flashOn ? "Desligar Flash 🔦" : "Ligar Flash 🔦"}
-      </button>
-    </div>
-  );
-}
