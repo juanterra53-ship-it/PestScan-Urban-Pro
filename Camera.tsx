@@ -1,84 +1,86 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function Camera() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [track, setTrack] = useState<MediaStreamTrack | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
   const [flashOn, setFlashOn] = useState(false);
+  const [hasFlash, setHasFlash] = useState(false);
 
   useEffect(() => {
-    let currentTrack: MediaStreamTrack | null = null;
-
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "environment"
-          }
-        });
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-
-        const videoTrack = stream.getVideoTracks()[0];
-        currentTrack = videoTrack;
-        setTrack(videoTrack);
-
-      } catch (error) {
-        console.error("Erro ao acessar câmera:", error);
-      }
-    }
-
     startCamera();
-
-    return () => {
-      if (currentTrack) {
-        currentTrack.stop();
-      }
-    };
   }, []);
 
-  const toggleFlash = async () => {
-    if (!track) return;
-
+  const startCamera = async () => {
     try {
-      const capabilities = track.getCapabilities();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" }
+      });
 
-      if (!("torch" in capabilities)) {
-        alert("Flash não suportado neste dispositivo");
-        return;
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
       }
 
+      const track = stream.getVideoTracks()[0];
+      const capabilities: any = track.getCapabilities();
+
+      if (capabilities.torch) {
+        setHasFlash(true);
+      }
+    } catch (error) {
+      console.error("Erro ao iniciar câmera:", error);
+    }
+  };
+
+  const toggleFlash = async () => {
+    if (!streamRef.current) return;
+
+    const track = streamRef.current.getVideoTracks()[0];
+
+    try {
       await track.applyConstraints({
-        advanced: [{ torch: !flashOn }]
+        advanced: [{ torch: !flashOn } as any]
       });
 
       setFlashOn(!flashOn);
-
     } catch (error) {
       console.error("Erro ao ativar flash:", error);
     }
   };
 
   return (
-    <div className="relative w-full max-w-md mx-auto">
-
+    <div style={{ position: "relative", height: "100vh", background: "#000" }}>
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        className="w-full rounded-3xl shadow-lg"
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "cover"
+        }}
       />
 
-      {/* BOTÃO FLASH */}
-      <button
-        onClick={toggleFlash}
-        className={`absolute top-4 right-4 p-3 rounded-full text-xl shadow-lg transition-all duration-300
-        ${flashOn ? "bg-yellow-400 text-black scale-110" : "bg-black/60 text-white"}`}
-      >
-        ⚡
-      </button>
-
+      {hasFlash && (
+        <button
+          onClick={toggleFlash}
+          style={{
+            position: "absolute",
+            top: 20,
+            right: 20,
+            fontSize: 28,
+            background: flashOn ? "#FFD700" : "rgba(255,255,255,0.4)",
+            border: "none",
+            borderRadius: "50%",
+            width: 60,
+            height: 60
+          }}
+        >
+          ⚡
+        </button>
+      )}
     </div>
   );
 }
