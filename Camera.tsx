@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
-export default function Camera() {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-
+const Camera = () => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
   const [flashOn, setFlashOn] = useState(false);
+  const [hasTorch, setHasTorch] = useState(false);
 
   useEffect(() => {
     startCamera();
@@ -16,57 +16,82 @@ export default function Camera() {
 
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" }
-        }
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
       });
 
-      streamRef.current = stream;
+      setStream(mediaStream);
 
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        videoRef.current.srcObject = mediaStream;
       }
 
+      const track = mediaStream.getVideoTracks()[0];
+      const capabilities = track.getCapabilities();
+
+      if ("torch" in capabilities) {
+        setHasTorch(true);
+      }
     } catch (error) {
-      console.error("Erro ao iniciar câmera:", error);
-      alert("Não foi possível acessar a câmera.");
+      console.error("Erro ao acessar câmera:", error);
     }
   };
 
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
+    stream?.getTracks().forEach((track) => track.stop());
   };
 
   const toggleFlash = async () => {
-    if (!streamRef.current) return;
+    if (!stream) return;
 
-    const track = streamRef.current.getVideoTracks()[0];
+    const track = stream.getVideoTracks()[0];
 
     try {
       await track.applyConstraints({
-        advanced: [{ torch: !flashOn } as any]
-      });
+        advanced: [{ torch: !flashOn }],
+      } as any);
 
       setFlashOn(!flashOn);
     } catch (error) {
-      console.log("Flash não suportado neste navegador.");
-      alert("Flash não suportado neste navegador.");
+      console.log("Flash não suportado nesse dispositivo");
     }
   };
 
   return (
-    <div
-      style={{
-        position: "relative",
-        height: "100vh",
-        backgroundColor: "#000"
-      }}
-    >
+    <div style={{ position: "relative", width: "100%", height: "100vh" }}>
       <video
         ref={videoRef}
         autoPlay
         playsInline
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+        }}
+      />
+
+      {hasTorch && (
+        <button
+          onClick={toggleFlash}
+          style={{
+            position: "absolute",
+            top: 20,
+            right: 20,
+            backgroundColor: flashOn ? "yellow" : "white",
+            borderRadius: "50%",
+            width: 60,
+            height: 60,
+            fontSize: 28,
+            border: "none",
+            cursor: "pointer",
+            boxShadow: "0 0 10px rgba(0,0,0,0.3)",
+          }}
+        >
+          ⚡
+        </button>
+      )}
+    </div>
+  );
+};
+
+export default Camera;
