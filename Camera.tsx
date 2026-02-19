@@ -4,8 +4,8 @@ export default function Camera() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const [flashSupported, setFlashSupported] = useState<boolean>(false);
-  const [flashOn, setFlashOn] = useState<boolean>(false);
+  const [flashSupported, setFlashSupported] = useState(false);
+  const [flashOn, setFlashOn] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const startCamera = useCallback(async () => {
@@ -23,12 +23,14 @@ export default function Camera() {
 
       const track = stream.getVideoTracks()[0];
 
-      // Verifica suporte ao torch de forma segura
-      const capabilities = (track as any).getCapabilities?.();
+      // Aguarda pequeno tempo para garantir que o track inicializou
+      setTimeout(() => {
+        const capabilities = (track as any).getCapabilities?.();
 
-      if (capabilities && capabilities.torch) {
-        setFlashSupported(true);
-      }
+        if (capabilities && "torch" in capabilities) {
+          setFlashSupported(true);
+        }
+      }, 500);
 
     } catch (err) {
       console.error("Erro ao acessar câmera:", err);
@@ -52,7 +54,6 @@ export default function Camera() {
       });
 
       setFlashOn(prev => !prev);
-
     } catch (err) {
       console.error("Erro ao ativar flash:", err);
     }
@@ -60,10 +61,7 @@ export default function Camera() {
 
   useEffect(() => {
     startCamera();
-
-    return () => {
-      stopCamera();
-    };
+    return () => stopCamera();
   }, [startCamera, stopCamera]);
 
   return (
@@ -73,7 +71,6 @@ export default function Camera() {
         width: "100%",
         height: "100vh",
         backgroundColor: "black",
-        overflow: "hidden",
       }}
     >
       <video
@@ -128,4 +125,3 @@ export default function Camera() {
     </div>
   );
 }
-s
