@@ -11,7 +11,7 @@ import {
   Globe, Cpu, Image as ImageIcon
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
-import { analyzePestImage, analyzePestByName } from './geminiService';
+import { analyzePestImage, analyzePestByName, generatePestAudio } from './geminiService';
 import { RecognitionResult, HistoryEntry, EncyclopediaItem, PestInfo } from './types';
 
 const ENCYCLOPEDIA_DATA: EncyclopediaItem[] = [
