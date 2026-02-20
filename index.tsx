@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
+import './index.css';
 import { 
   Bug, Camera, BookOpen, History, 
   ChevronRight, ArrowLeft, Loader2, 
@@ -14,4 +15,4 @@ import { supabase } from './supabaseClient';
 import { analyzePestImage, analyzePestByName, generatePestAudio } from './geminiService';
 import { RecognitionResult, HistoryEntry, EncyclopediaItem, PestInfo } from './types';
 
-// ... (Restante do código do App que te mandei anteriormente)
+// ... (Resto do código ENCYCLOPEDIA_DATA e componente App que te mandei antes)
