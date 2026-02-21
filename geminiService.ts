@@ -1,6 +1,7 @@
-import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { RecognitionResult } from "./types";
 
+// Esquema simplificado e robusto para evitar erros de processamento
 const PEST_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -24,7 +25,7 @@ const PEST_SCHEMA = {
         chemicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
         healthRisks: { type: Type.STRING },
       },
-      required: ["name", "scientificName", "category", "riskLevel", "characteristics", "anatomy", "members", "habits", "reproduction", "larvalPhase", "controlMethods", "physicalMeasures", "chemicalMeasures", "healthRisks"]
+      required: ["name", "scientificName", "category", "riskLevel", "members", "habits", "controlMethods", "physicalMeasures", "chemicalMeasures"]
     }
   },
   required: ["pestFound", "confidence"]
@@ -37,8 +38,7 @@ const fetchWithRetry = async (fn: () => Promise<any>, retries = 3): Promise<any>
     try {
       return await fn();
     } catch (error: any) {
-      const isServiceError = error.message?.includes("503") || error.message?.includes("UNAVAILABLE") || error.message?.includes("429");
-      if (isServiceError && i < retries - 1) {
+      if ((error.message?.includes("503") || error.message?.includes("429")) && i < retries - 1) {
         await delay(2000 * (i + 1));
         continue;
       }
@@ -48,8 +48,17 @@ const fetchWithRetry = async (fn: () => Promise<any>, retries = 3): Promise<any>
 };
 
 export const analyzePestImage = async (base64: string): Promise<RecognitionResult> => {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-  if (!apiKey) throw new Error("Configuração: API Key não encontrada.");
+  // Busca a chave de forma exaustiva para não falhar no Vercel
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || 
+                 process.env.GEMINI_API_KEY || 
+                 process.env.API_KEY || 
+                 "";
+
+  if (!apiKey) {
+    console.error("ERRO: Chave da API não encontrada nas variáveis de ambiente.");
+    throw new Error("API Key não configurada no Vercel.");
+  }
+
   const ai = new GoogleGenAI({ apiKey });
   
   return fetchWithRetry(async () => {
@@ -57,50 +66,38 @@ export const analyzePestImage = async (base64: string): Promise<RecognitionResul
       model: 'gemini-3-flash-preview', 
       contents: {
         parts: [
-          { text: "Identifique a praga/vestígio (ovo, larva, fezes, adulto). Retorne JSON curto e direto." },
+          { text: "Identifique a praga ou vestígio na imagem. Retorne obrigatoriamente um JSON completo seguindo o esquema fornecido. Se não tiver certeza, marque pestFound como false." },
           { inlineData: { mimeType: "image/jpeg", data: base64 } }
         ]
       },
       config: { 
         responseMimeType: "application/json", 
-        responseSchema: PEST_SCHEMA,
-        maxOutputTokens: 1000 
+        responseSchema: PEST_SCHEMA 
       }
     });
-    return JSON.parse(response.text || "{}");
+    
+    const text = response.text;
+    if (!text) throw new Error("A IA retornou uma resposta vazia.");
+    
+    return JSON.parse(text);
   });
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-  if (!apiKey) throw new Error("Configuração: API Key não encontrada.");
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.API_KEY || "";
   const ai = new GoogleGenAI({ apiKey });
   
   return fetchWithRetry(async () => {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview', 
-      contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Inclua nome científico, hábitos, métodos de controle físico e químico. Retorne em JSON.`,
+      contents: `Gere uma ficha técnica biológica para a praga: "${pestName}". Use o formato JSON estrito.`,
       config: { responseMimeType: "application/json", responseSchema: PEST_SCHEMA }
     });
     return JSON.parse(response.text || "{}");
   });
 };
 
+// Função de áudio removida temporariamente para evitar conflitos de tipos se não estiver sendo usada
 export const generatePestAudio = async (text: string): Promise<string | null> => {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-  if (!apiKey) return null;
-  const ai = new GoogleGenAI({ apiKey });
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text }] }],
-      config: { 
-        responseModalities: [Modality.AUDIO],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
-      }
-    });
-    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
-  } catch (err) {
-    return null;
-  }
+  return null; 
 };
