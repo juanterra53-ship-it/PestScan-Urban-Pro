@@ -1105,4 +1105,8 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </ErrorBoundary>
 );
-// Forcing git refresh 2
+createRoot(document.getElementById('root')!).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);
