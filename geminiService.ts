@@ -1,14 +1,9 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { RecognitionResult } from "./types";
 
-<<<<<<< HEAD
-// Declarações globais para o TensorFlow carregado via CDN no index.html
 declare const tf: any;
 declare const tflite: any;
 
-=======
-// Esquema simplificado e robusto para evitar erros de processamento
->>>>>>> b10237416117e42630d5207369ac05b709cf4d9e
 const PEST_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -38,7 +33,6 @@ const PEST_SCHEMA = {
   required: ["pestFound", "confidence"]
 };
 
-// Função auxiliar para aguardar tempo determinado (Exponential Backoff)
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 const fetchWithRetry = async (fn: () => Promise<any>, retries = 3): Promise<any> => {
@@ -60,8 +54,6 @@ const fetchWithRetry = async (fn: () => Promise<any>, retries = 3): Promise<any>
 let localModel: any = null;
 let isModelLoading = false;
 
-// Labels correspondentes ao seu modelo treinado no Colab
-// IMPORTANTE: Ajuste esta lista se o seu modelo tiver classes diferentes
 const MODEL_LABELS = [
   "Escorpião Amarelo",
   "Aranha Marrom",
@@ -76,13 +68,8 @@ export const loadLocalModel = async () => {
   isModelLoading = true;
   try {
     console.log("Iniciando carregamento do modelo local TFLite...");
-    
-    // Aguarda o TensorFlow.js inicializar completamente
     await tf.ready();
-    
-    // Configura o caminho para os arquivos WebAssembly do TFLite (Versão alpha.9 para estabilidade)
     tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
-    
     localModel = await tflite.loadTFLiteModel('/model/modelo_barata.tflite');
     console.log("Modelo local TFLite carregado com sucesso!");
   } catch (error: any) {
@@ -103,18 +90,15 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
   }
 
   try {
-    // Pré-processamento da imagem para o TensorFlow
     const tensor = tf.browser.fromPixels(imageElement)
-      .resizeNearestNeighbor([224, 224]) // Ajuste o tamanho conforme o seu modelo TFLite
+      .resizeNearestNeighbor([224, 224])
       .toFloat()
       .div(tf.scalar(255.0))
       .expandDims();
 
-    // Inferência com TFLite
     const predictions = await localModel.predict(tensor) as any;
     const scores = await predictions.data();
     
-    // Converte Float32Array para Array normal para usar o Math.max
     const scoresArray = Array.from(scores) as number[];
     const maxScoreIndex = scoresArray.indexOf(Math.max(...scoresArray));
     const maxScore = scoresArray[maxScoreIndex];
@@ -123,8 +107,7 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     tensor.dispose();
     predictions.dispose();
 
-    // Formatação do Resultado Offline
-    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.5) { // Threshold de 50%
+    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.5) {
       return {
         pestFound: false,
         confidence: maxScore,
@@ -132,7 +115,6 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
       };
     }
 
-    // Retorna um resultado básico. Para dados completos, o app precisará ficar online.
     return {
       pestFound: true,
       confidence: maxScore,
@@ -140,7 +122,7 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         name: predictedLabel,
         scientificName: "Nome Científico (Requer Internet)",
         category: "Categoria (Requer Internet)",
-        riskLevel: "Moderado", // Valor padrão
+        riskLevel: "Moderado",
         characteristics: ["Detectado offline"],
         anatomy: "Conecte-se à internet para ver detalhes da anatomia.",
         members: "N/A",
@@ -162,7 +144,6 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 };
 
 export const analyzePestImage = async (base64: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
-  // Verificação Híbrida: Online vs Offline
   if (!navigator.onLine) {
     console.log("Dispositivo offline. Tentando análise local...");
     if (imageElement) {
@@ -172,7 +153,6 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
     }
   }
 
-  // Lógica Online (Gemini API)
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("Configuração: API Key não encontrada no ambiente.");
   const ai = new GoogleGenAI({ apiKey });
@@ -194,7 +174,6 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
     });
     
     const text = response.text || "{}";
-    // Limpeza defensiva caso o modelo retorne markdown
     const cleanJson = text.replace(/```json/g, "").replace(/```/g, "").trim();
     return JSON.parse(cleanJson);
   });
@@ -221,12 +200,14 @@ export const generatePestAudio = async (text: string): Promise<string | null> =>
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
   const ai = new GoogleGenAI({ apiKey });
-  
-  return fetchWithRetry(async () => {
+  try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', 
-      contents: `Gere uma ficha técnica biológica para a praga: "${pestName}". Use o formato JSON estrito.`,
-      config: { responseMimeType: "application/json", responseSchema: PEST_SCHEMA }
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text }] }],
+      config: { 
+        responseModalities: [Modality.AUDIO],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
+      }
     });
     return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
   } catch (err) {
