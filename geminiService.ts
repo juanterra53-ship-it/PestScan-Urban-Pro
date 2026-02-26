@@ -1,10 +1,14 @@
-import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { RecognitionResult } from "./types";
 
+<<<<<<< HEAD
 // Declarações globais para o TensorFlow carregado via CDN no index.html
 declare const tf: any;
 declare const tflite: any;
 
+=======
+// Esquema simplificado e robusto para evitar erros de processamento
+>>>>>>> b10237416117e42630d5207369ac05b709cf4d9e
 const PEST_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -217,14 +221,12 @@ export const generatePestAudio = async (text: string): Promise<string | null> =>
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
   const ai = new GoogleGenAI({ apiKey });
-  try {
+  
+  return fetchWithRetry(async () => {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text }] }],
-      config: { 
-        responseModalities: [Modality.AUDIO],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
-      }
+      model: 'gemini-3-flash-preview', 
+      contents: `Gere uma ficha técnica biológica para a praga: "${pestName}". Use o formato JSON estrito.`,
+      config: { responseMimeType: "application/json", responseSchema: PEST_SCHEMA }
     });
     return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
   } catch (err) {
