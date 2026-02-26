@@ -11,44 +11,25 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="msapplication-navbutton-color" content="#022c22">
     <meta name="apple-mobile-web-app-status-bar-style" content="#022c22">
-    
-    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- TensorFlow.js (Versão 3.21.0 - Estável para TFLite) -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
-    
-    <!-- TensorFlow Lite (Versão alpha.9 - Compatível com WASM) -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/tf-tflite.min.js"></script>
-    
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
         html, body { 
             font-family: 'Plus Jakarta Sans', sans-serif; 
-            background-color: #022c22; 
+            background-color: #f8fafc; 
             margin: 0; 
             overscroll-behavior-y: contain;
             height: 100%;
         }
         .animate-in { animation: fadeIn 0.3s ease-out forwards; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        #error-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); color: white; z-index: 9999; padding: 20px; overflow: auto; font-family: monospace; white-space: pre-wrap; }
     </style>
-<script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.41.0",
-    "vite": "https://esm.sh/vite@^7.3.1",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.4",
-    "lucide-react": "https://esm.sh/lucide-react@^0.564.0",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.95.3"
-  }
-}
-</script>
 </head>
 <body>
+    <div id="error-overlay"></div>
     <div id="root"></div>
     <script type="module" src="./index.tsx"></script>
 </body>
