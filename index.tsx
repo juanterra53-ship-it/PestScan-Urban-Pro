@@ -781,18 +781,25 @@ const App: React.FC = () => {
       const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.7));
       if (!blob) throw new Error("Falha na captura.");
 
-      // 1. Upload para o Storage
-      const fileName = `${user?.id}/${Date.now()}.jpg`;
-      const { error: uploadError } = await supabase.storage
-        .from('pest-images')
-        .upload(fileName, blob);
+     let publicUrl = "";
+      
+      // Só tenta fazer upload se estiver online
+      if (navigator.onLine) {
+        const fileName = `${user?.id}/${Date.now()}.jpg`;
+        const { error: uploadError } = await supabase.storage
+          .from('pest-images')
+          .upload(fileName, blob);
 
-      if (uploadError) throw uploadError;
+        if (uploadError) throw uploadError;
 
-      // 2. URL Pública
-      const { data: { publicUrl } } = supabase.storage
-        .from('pest-images')
-        .getPublicUrl(fileName);
+        const { data } = supabase.storage
+          .from('pest-images')
+          .getPublicUrl(fileName);
+        publicUrl = data.publicUrl;
+      } else {
+        // Se estiver offline, usa a imagem local em base64
+        publicUrl = canvas.toDataURL('image/jpeg', 0.5);
+      }
 
       const res = await analyzePestImage(canvas.toDataURL('image/jpeg', 0.5).split(',')[1], canvas);
       clearTimeout(timeoutId);
@@ -802,11 +809,12 @@ const App: React.FC = () => {
       setCurrentResult(fullRes);
       setView('result');
 
-      if (res.pestFound && user) {
+      // Só salva no histórico se estiver online
+      if (res.pestFound && user && navigator.onLine) {
         await supabase.from('pest_detections')
           .insert({ 
             user_id: user.id, 
-            image_data: publicUrl, // Link leve
+            image_data: publicUrl, 
             pest_name: res.pest?.name || 'IA Scan', 
             confidence: res.confidence, 
             analysis_result: fullRes 
