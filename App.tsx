@@ -1,11 +1,5 @@
-import React from "react";
-import Camera from "./Camera";
+import React from 'react';
 
 export default function App() {
-  return (
-    <div>
-      <h1>PestScan Urban Pro</h1>
-      <Camera />
-    </div>
-  );
+  return null;
 }
