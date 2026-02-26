@@ -2,24 +2,32 @@ export interface PestInfo {
   name: string;
   scientificName: string;
   category: string;
-  riskLevel: string;
+  riskLevel: 'Baixo' | 'Moderado' | 'Alto' | 'Crítico';
   characteristics: string[];
   anatomy: string;
-  members: string;
+  members: string; // Quantidade de pernas/membros
   habits: string;
-  reproduction: string;
-  larvalPhase: string;
+  reproduction: string; // Quantidade de ovos/postura
+  larvalPhase: string; // Informações sobre a fase larval/imatura
   controlMethods: string[];
-  physicalMeasures: string[];
-  chemicalMeasures: string[];
+  physicalMeasures: string[]; // Medidas físicas específicas
+  chemicalMeasures: string[]; // Medidas químicas específicas
   healthRisks: string;
+}
+
+export interface GroundingSource {
+  title: string;
+  uri: string;
+  type?: 'map' | 'web';
 }
 
 export interface RecognitionResult {
   pestFound: boolean;
   confidence: number;
   pest?: PestInfo;
+  message?: string; // <--- ESTA É A LINHA QUE ESTAVA FALTANDO!
   capturedImage?: string;
+  sources?: GroundingSource[];
 }
 
 export interface HistoryEntry {
@@ -32,7 +40,7 @@ export interface HistoryEntry {
 export interface EncyclopediaItem {
   id: string;
   name: string;
-  category: string;
+  category: 'Rasteiros' | 'Voadores' | 'Aracnídeos' | 'Roedores';
   icon: string;
   details: PestInfo;
 }
