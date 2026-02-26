@@ -1,5 +1,7 @@
-import React from 'react';
-
 export default function App() {
-  return null;
+  return (
+    <div>
+      <h1>App funcionando 🚀</h1>
+    </div>
+  );
 }
