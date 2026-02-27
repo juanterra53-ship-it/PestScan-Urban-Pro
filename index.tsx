@@ -652,11 +652,15 @@ const App: React.FC = () => {
                     setZoom(currentZoom);
                   }
                 }
-            }, 1000);
+            }, 1500);
           }
         } catch (e: any) { 
             console.error(e);
-            setError("Câmera indisponível: Verifique as permissões do seu navegador."); 
+            if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError' || e.message?.includes("denied")) {
+              setError("Acesso à câmera negado. Por favor, autorize o uso da câmera nas configurações do seu navegador para usar o scanner.");
+            } else {
+              setError("Câmera indisponível: Verifique as permissões do seu navegador ou se outra aba está usando a câmera."); 
+            }
         }
       };
       initCamera();
@@ -688,17 +692,75 @@ const App: React.FC = () => {
 
   const formatErrorMessage = (err: any) => {
     const msg = err.message || JSON.stringify(err);
-    if (msg.includes("JSON")) return `Erro de formato na IA. Detalhe: ${msg.substring(0, 50)}...`;
-    return `[v2.4] Erro: ${msg}`;
-  };
+    console.error("Erro detalhado:", err);
     
     if (msg.includes("503") || msg.includes("UNAVAILABLE")) return "O servidor de IA está com alta demanda agora. Por favor, aguarde um instante e tente novamente.";
     if (msg.includes("429")) return "Muitas solicitações seguidas. Aguarde 10 segundos.";
-    if (msg.includes("API Key") || msg.includes("ambiente")) return "A chave da IA (API Key) não foi configurada. Verifique as variáveis de ambiente.";
-    if (msg.includes("setPhotoOptions")) return "Hardware da câmera ocupado. Reiniciando visor...";
-    if (msg.includes("JSON")) return "A IA retornou um formato inesperado. Tente capturar novamente com melhor iluminação.";
+    if (msg.includes("setPhotoOptions") || msg.includes("Permission denied")) return "Acesso à câmera negado ou hardware ocupado. Verifique as permissões do navegador.";
+    if (msg.includes("dimensões")) return "A câmera ainda está iniciando. Tente capturar novamente em 2 segundos.";
+    if (msg.includes("JSON")) return `Erro de Processamento: A IA enviou dados malformados. Tente novamente.`;
     
-    return `Erro na análise: ${msg}`;
+    return `[v4.0 MASTER-FIX] Erro: ${msg}`;
+  };
+
+  const forceRefresh = async () => {
+    try {
+      // Limpa Service Workers
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const registration of registrations) {
+          await registration.unregister();
+        }
+      }
+      // Limpa Caches
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        for (const name of cacheNames) {
+          await caches.delete(name);
+        }
+      }
+      // Limpa LocalStorage (opcional, mas ajuda no debug)
+      // localStorage.clear();
+      
+      // Recarrega a página forçando o servidor
+      window.location.reload();
+    } catch (e) {
+      window.location.reload();
+    }
+  };
+
+  const compressImage = async (imgSource: HTMLImageElement | HTMLVideoElement): Promise<{ blob: Blob, dataUrl: string }> => {
+    const canvas = document.createElement('canvas');
+    const maxWidth = 800; // Resolução otimizada para Gemini Vision
+    
+    let width = 0;
+    let height = 0;
+    
+    if (imgSource instanceof HTMLImageElement) {
+      width = imgSource.width;
+      height = imgSource.height;
+    } else {
+      width = imgSource.videoWidth;
+      height = imgSource.videoHeight;
+    }
+
+    const scale = Math.min(1, maxWidth / width);
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error("Não foi possível inicializar o contexto do Canvas.");
+    
+    ctx.drawImage(imgSource, 0, 0, canvas.width, canvas.height);
+    
+    // Compressão agressiva para Supabase (0.6) e IA (0.5)
+    const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.6));
+    if (!blob) throw new Error("Falha na compressão da imagem.");
+    
+    return {
+      blob,
+      dataUrl: canvas.toDataURL('image/jpeg', 0.5)
+    };
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -720,41 +782,27 @@ const App: React.FC = () => {
         img.src = base64Data;
       });
 
-      // Redimensionamento para 800px (equilíbrio entre qualidade e peso)
-      const canvas = document.createElement('canvas');
-      const maxWidth = 800;
-      const scale = Math.min(1, maxWidth / img.width);
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
+      const { blob, dataUrl } = await compressImage(img);
+      let publicUrl = dataUrl;
       
-      const ctx = canvas.getContext('2d');
-      ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-      
-      const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.7));
-      if (!blob) throw new Error("Falha ao processar imagem.");
-
-      let publicUrl = canvas.toDataURL('image/jpeg', 0.5);
-      
-      // Só tenta fazer upload se estiver online
-      if (navigator.onLine) {
+      // Upload para Supabase (Otimizado)
+      if (navigator.onLine && user && user.id !== 'offline') {
         try {
-          const fileName = `${user?.id || 'guest'}/${Date.now()}.jpg`;
-          const { data: uploadData, error: uploadError } = await supabase.storage
+          const fileName = `${user.id}/${Date.now()}.jpg`;
+          const { error: uploadError } = await supabase.storage
             .from('pest-images')
-            .upload(fileName, blob);
+            .upload(fileName, blob, { contentType: 'image/jpeg', cacheControl: '3600' });
 
           if (!uploadError) {
-            const { data } = supabase.storage
-              .from('pest-images')
-              .getPublicUrl(fileName);
+            const { data } = supabase.storage.from('pest-images').getPublicUrl(fileName);
             publicUrl = data.publicUrl;
           }
         } catch (uploadErr) {
-          console.warn("Upload falhou, continuando com imagem local:", uploadErr);
+          console.warn("Upload falhou, usando local:", uploadErr);
         }
       }
 
-      const res = await analyzePestImage(canvas.toDataURL('image/jpeg', 0.5).split(',')[1], canvas);
+      const res = await analyzePestImage(dataUrl.split(',')[1]);
       const fullRes = { ...res, capturedImage: publicUrl };
       
       setCurrentResult(fullRes);
@@ -796,41 +844,26 @@ const App: React.FC = () => {
     }, 30000);
 
     try {
-      const video = videoRef.current;
-      const canvas = document.createElement('canvas');
-      const maxWidth = 800;
-      const scale = Math.min(1, maxWidth / video.videoWidth);
-      canvas.width = video.videoWidth * scale;
-      canvas.height = video.videoHeight * scale;
+      const { blob, dataUrl } = await compressImage(videoRef.current);
+      let publicUrl = dataUrl;
       
-      const ctx = canvas.getContext('2d');
-      ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
-      
-      const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.7));
-      if (!blob) throw new Error("Falha na captura.");
-
-      let publicUrl = canvas.toDataURL('image/jpeg', 0.5);
-      
-      // Só tenta fazer upload se estiver online
-      if (navigator.onLine) {
+      if (navigator.onLine && user && user.id !== 'offline') {
         try {
-          const fileName = `${user?.id || 'guest'}/${Date.now()}.jpg`;
+          const fileName = `${user.id}/${Date.now()}.jpg`;
           const { error: uploadError } = await supabase.storage
             .from('pest-images')
-            .upload(fileName, blob);
+            .upload(fileName, blob, { contentType: 'image/jpeg', cacheControl: '3600' });
 
           if (!uploadError) {
-            const { data } = supabase.storage
-              .from('pest-images')
-              .getPublicUrl(fileName);
+            const { data } = supabase.storage.from('pest-images').getPublicUrl(fileName);
             publicUrl = data.publicUrl;
           }
         } catch (uploadErr) {
-          console.warn("Upload falhou, continuando com imagem local:", uploadErr);
+          console.warn("Upload falhou, usando local:", uploadErr);
         }
       }
 
-      const res = await analyzePestImage(canvas.toDataURL('image/jpeg', 0.5).split(',')[1], canvas);
+      const res = await analyzePestImage(dataUrl.split(',')[1]);
       clearTimeout(timeoutId);
       
       const fullRes = { ...res, capturedImage: publicUrl };
@@ -961,10 +994,11 @@ const App: React.FC = () => {
       }} className="w-full max-w-xs space-y-4">
         <input type="email" placeholder="E-mail" value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-emerald-900/40 border border-emerald-800 rounded-2xl py-4 px-6 text-white outline-none" />
         <input type="password" placeholder="Senha" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-emerald-900/40 border border-emerald-800 rounded-2xl py-4 px-6 text-white outline-none" />
-        <button className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl uppercase text-sm">Entrar</button>
+        <button className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl uppercase text-sm">Entrar</button>
       </form>
       <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="mt-8 text-emerald-400 text-xs font-bold uppercase">Trocar para {authMode === 'login' ? 'Cadastro' : 'Login'}</button>
       <button onClick={() => { setUser({ id: 'offline', email: 'offline@local', name: 'Modo Offline' }); setView('main'); }} className="mt-4 text-slate-400 text-xs font-bold uppercase underline">Entrar no Modo Offline</button>
+      <button onClick={forceRefresh} className="mt-8 text-emerald-400 text-[12px] font-black uppercase border-2 border-emerald-400 px-6 py-3 rounded-2xl animate-pulse">⚠️ Clique aqui para Atualizar (v4.0 MASTER-FIX)</button>
     </div>
   );
 
@@ -974,7 +1008,19 @@ const App: React.FC = () => {
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-3">
             <div className="bg-emerald-400/20 p-2 rounded-xl"><Bug className="text-emerald-400 w-6 h-6" /></div>
-            <div><h1 className="font-black text-lg">PestScan Pro</h1><p className="text-[10px] text-emerald-400/60 font-bold uppercase">{user?.name}</p></div>
+            <div>
+              <h1 className="font-black text-lg">PestScan Pro</h1>
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] text-emerald-400/60 font-bold uppercase">{user?.name} • v4.0 MASTER-FIX</p>
+                <button 
+                  onClick={forceRefresh}
+                  className="text-[8px] bg-emerald-400/10 hover:bg-emerald-400/20 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-400/20 transition-colors"
+                  title="Forçar Atualização"
+                >
+                  Atualizar App
+                </button>
+              </div>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {user && <button onClick={() => supabase.auth.signOut()} className="p-2 bg-white/10 rounded-xl"><LogOut size={20} /></button>}
@@ -1183,4 +1229,5 @@ if (container) {
     </ErrorBoundary>
   );
 }
-// Forcing git refresh 3 - Final fix for camera and pests list
+// Forcing git refresh 4 - Fix permissions and capture readiness
+
