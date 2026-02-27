@@ -32,17 +32,16 @@ const PEST_SCHEMA = {
 
 export const analyzePestImage = async (base64: string): Promise<RecognitionResult> => {
   const apiKey = ((import.meta as any).env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim();
-  if (!apiKey || apiKey.length < 5) throw new Error("CHAVE_AUSENTE_V3.1 - Verifique o Vercel.");
+  if (!apiKey || apiKey.length < 5) throw new Error("CHAVE_AUSENTE_V4.0 - Verifique o Vercel.");
   
   const ai = new GoogleGenAI({ apiKey });
-  const model = ai.models.generateContent({
-    model: 'gemini-1.5-flash', 
-    contents: { parts: [{ text: "Analise a imagem e identifique a praga. Retorne estritamente JSON." }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] },
-    config: { responseMimeType: "application/json", responseSchema: PEST_SCHEMA, temperature: 0.1 }
-  });
-
   try {
-    const response = await model;
+    const response = await ai.models.generateContent({
+      model: 'gemini-1.5-flash', 
+      contents: { parts: [{ text: "Analise a praga na imagem. Retorne estritamente JSON." }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] },
+      config: { responseMimeType: "application/json", responseSchema: PEST_SCHEMA, temperature: 0.1 }
+    });
+    
     let cleanJson = response.text.trim();
     const start = cleanJson.indexOf('{');
     const end = cleanJson.lastIndexOf('}');
