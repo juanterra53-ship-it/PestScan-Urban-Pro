@@ -700,7 +700,7 @@ const App: React.FC = () => {
     if (msg.includes("dimensões")) return "A câmera ainda está iniciando. Tente capturar novamente em 2 segundos.";
     if (msg.includes("JSON")) return `Erro de Processamento: A IA enviou dados malformados. Tente novamente.`;
     
-    return `[v4.0 MASTER-FIX] Erro: ${msg}`;
+    return `[v4.2 MASTER-FINAL] Erro: ${msg}`;
   };
 
   const forceRefresh = async () => {
@@ -998,7 +998,7 @@ const App: React.FC = () => {
       </form>
       <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="mt-8 text-emerald-400 text-xs font-bold uppercase">Trocar para {authMode === 'login' ? 'Cadastro' : 'Login'}</button>
       <button onClick={() => { setUser({ id: 'offline', email: 'offline@local', name: 'Modo Offline' }); setView('main'); }} className="mt-4 text-slate-400 text-xs font-bold uppercase underline">Entrar no Modo Offline</button>
-      <button onClick={forceRefresh} className="mt-8 text-emerald-400 text-[12px] font-black uppercase border-2 border-emerald-400 px-6 py-3 rounded-2xl animate-pulse">⚠️ Clique aqui para Atualizar (v4.0 MASTER-FIX)</button>
+      <button onClick={forceRefresh} className="mt-8 text-emerald-400 text-[12px] font-black uppercase border-2 border-emerald-400 px-6 py-3 rounded-2xl animate-pulse">⚠️ Clique aqui para Atualizar (v4.2 MASTER-FINAL)</button>
     </div>
   );
 
@@ -1011,7 +1011,7 @@ const App: React.FC = () => {
             <div>
               <h1 className="font-black text-lg">PestScan Pro</h1>
               <div className="flex items-center gap-2">
-                <p className="text-[10px] text-emerald-400/60 font-bold uppercase">{user?.name} • v4.0 MASTER-FIX</p>
+                <p className="text-[10px] text-emerald-400/60 font-bold uppercase">{user?.name} • v4.2 MASTER-FINAL</p>
                 <button 
                   onClick={forceRefresh}
                   className="text-[8px] bg-emerald-400/10 hover:bg-emerald-400/20 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-400/20 transition-colors"
