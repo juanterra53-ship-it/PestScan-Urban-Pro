@@ -688,7 +688,9 @@ const App: React.FC = () => {
 
   const formatErrorMessage = (err: any) => {
     const msg = err.message || JSON.stringify(err);
-    console.error("Erro detalhado:", err);
+    if (msg.includes("JSON")) return `Erro de formato na IA. Detalhe: ${msg.substring(0, 50)}...`;
+    return `[v2.4] Erro: ${msg}`;
+  };
     
     if (msg.includes("503") || msg.includes("UNAVAILABLE")) return "O servidor de IA está com alta demanda agora. Por favor, aguarde um instante e tente novamente.";
     if (msg.includes("429")) return "Muitas solicitações seguidas. Aguarde 10 segundos.";
