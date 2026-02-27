@@ -1,8 +1,5 @@
-import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { RecognitionResult } from "./types";
-
-declare const tf: any;
-declare const tflite: any;
 
 const PEST_SCHEMA = {
   type: Type.OBJECT,
@@ -33,96 +30,25 @@ const PEST_SCHEMA = {
   required: ["pestFound", "confidence"]
 };
 
-const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
-
-const fetchWithRetry = async (fn: () => Promise<any>, retries = 3): Promise<any> => {
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fn();
-    } catch (error: any) {
-      const isServiceError = error.message?.includes("503") || error.message?.includes("UNAVAILABLE") || error.message?.includes("429");
-      if (isServiceError && i < retries - 1) {
-        await delay(2000 * (i + 1));
-        continue;
-      }
-      throw error;
-    }
-  }
-};
-
 export const analyzePestImage = async (base64: string): Promise<RecognitionResult> => {
-  const apiKey = (process.env.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_API_KEY || "").trim();
-  
-  if (!apiKey || apiKey.length < 5) {
-    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'unknown';
-    throw new Error(`CHAVE_AUSENTE_V2.4 - Verifique o Vercel.`);
-  }
+  const apiKey = ((import.meta as any).env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim();
+  if (!apiKey || apiKey.length < 5) throw new Error("CHAVE_AUSENTE_V3.1 - Verifique o Vercel.");
   
   const ai = new GoogleGenAI({ apiKey });
-  
-  return fetchWithRetry(async () => {
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview', 
-        contents: {
-          parts: [
-            { text: "Você é um especialista em entomologia urbana. Identifique a praga na imagem. Retorne estritamente JSON." },
-            { inlineData: { mimeType: "image/jpeg", data: base64 } }
-          ]
-        },
-        config: { 
-          responseMimeType: "application/json", 
-          responseSchema: PEST_SCHEMA
-        }
-      });
-      
-      const text = response.text;
-      if (!text) throw new Error("Resposta vazia da IA.");
-      
-      let cleanJson = text.trim();
-      if (cleanJson.startsWith("```")) {
-        cleanJson = cleanJson.replace(/^```[a-z]*\n?/, "").replace(/\n?```$/, "");
-      }
-      
-      return JSON.parse(cleanJson);
-    } catch (err: any) {
-      throw new Error("Falha na análise: " + (err.message || "Erro desconhecido"));
-    }
+  const model = ai.models.generateContent({
+    model: 'gemini-1.5-flash', 
+    contents: { parts: [{ text: "Analise a imagem e identifique a praga. Retorne estritamente JSON." }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] },
+    config: { responseMimeType: "application/json", responseSchema: PEST_SCHEMA, temperature: 0.1 }
   });
-};
 
-export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
-  const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error("API Key não encontrada.");
-  const ai = new GoogleGenAI({ apiKey });
-  
-  return fetchWithRetry(async () => {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', 
-      contents: `Ficha técnica da praga: "${pestName}". Retorne JSON puro.`,
-      config: { responseMimeType: "application/json", responseSchema: PEST_SCHEMA }
-    });
-    const text = response.text || "{}";
-    const cleanJson = text.replace(/```json/g, "").replace(/```/g, "").trim();
-    return JSON.parse(cleanJson);
-  });
-};
-
-export const generatePestAudio = async (text: string): Promise<string | null> => {
-  const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_API_KEY;
-  if (!apiKey) return null;
-  const ai = new GoogleGenAI({ apiKey });
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text }] }],
-      config: { 
-        responseModalities: [Modality.AUDIO],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
-      }
-    });
-    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
-  } catch (err) {
-    return null;
+    const response = await model;
+    let cleanJson = response.text.trim();
+    const start = cleanJson.indexOf('{');
+    const end = cleanJson.lastIndexOf('}');
+    if (start !== -1 && end !== -1) cleanJson = cleanJson.substring(start, end + 1);
+    return JSON.parse(cleanJson);
+  } catch (err: any) {
+    throw new Error("Falha na análise: " + err.message);
   }
 };
