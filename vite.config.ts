@@ -19,9 +19,9 @@ export default defineConfig(({ mode }) => {
           maximumFileSizeToCacheInBytes: 10000000 // 10MB para permitir o modelo tflite
         },
         manifest: {
-          name: 'PestScan Pro',
+          name: 'PestScan Pro v2.4',
           short_name: 'PestScan',
-          description: 'IA Urbana para detecção de pragas',
+          description: 'IA Urbana para detecção de pragas - v2.4',
           theme_color: '#022c22',
           background_color: '#022c22',
           display: 'standalone',
