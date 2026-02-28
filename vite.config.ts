@@ -30,9 +30,9 @@ export default defineConfig(({ mode }) => {
           maximumFileSizeToCacheInBytes: 10000000 // 10MB para permitir o modelo tflite
         },
         manifest: {
-          name: 'PestScan Pro v4.2 MASTER-FINAL',
+          name: 'PestScan Pro',
           short_name: 'PestScan',
-          description: 'IA Urbana para detecção de pragas - v4.2 MASTER-FINAL',
+          description: 'IA Urbana para detecção de pragas',
           theme_color: '#022c22',
           background_color: '#022c22',
           display: 'standalone',
@@ -51,7 +51,7 @@ export default defineConfig(({ mode }) => {
         }
       })
     ],
-    base: './', // Melhor compatibilidade para GitHub Pages e caminhos relativos
+    base: '/', // Standard for Vercel to avoid path issues
     server: {
       host: true,
       port: 3000,
