@@ -205,7 +205,7 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   ).trim();
   
   if (!apiKey || apiKey.length < 5) {
-    throw new Error(`CHAVE_AUSENTE_V4.2 - Verifique o Vercel.`);
+    throw new Error(`Configuração de API pendente.`);
   }
   
   const ai = new GoogleGenAI({ apiKey });
@@ -213,7 +213,7 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   return fetchWithRetry(async () => {
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-1.5-flash', 
+        model: 'gemini-3-flash-preview', 
         contents: {
           parts: [
             { text: "Você é um entomologista sênior. Analise a imagem e identifique a praga ou vestígio. Retorne estritamente um objeto JSON válido seguindo o schema fornecido. Não inclua explicações fora do JSON." },
@@ -222,8 +222,8 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
         },
         config: { 
           responseMimeType: "application/json", 
-          responseSchema: PEST_SCHEMA,
-          temperature: 0.1, // Mais determinístico
+          responseSchema: PEST_SCHEMA as any,
+          temperature: 0.1,
           maxOutputTokens: 2048
         }
       });
