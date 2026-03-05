@@ -88,10 +88,15 @@ export const isLocalModelLoaded = () => !!localModel;
 // IMPORTANTE: Ajuste esta lista para que os nomes sejam EXATAMENTE iguais aos da ENCYCLOPEDIA_DATA no index.tsx
 const MODEL_LABELS = [
   "Barata-alemã",
-  "Escorpião-amarelo",
+  "Barata-americana",
   "Aranha-marrom",
+  "Escorpião-amarelo",
+  "Cupim-subterrâneo",
   "Formiga-lava-pés",
   "Gorgulho-do-arroz",
+  "Mosca-doméstica",
+  "Mosquito",
+  "Rato",
   "Nenhuma Praga"
 ];
 
@@ -220,11 +225,11 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     tensor.dispose();
     if (predictions.dispose) predictions.dispose();
 
-    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.4) {
+    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.6) {
       return {
         pestFound: false,
         confidence: maxScore,
-        message: "Nenhuma praga identificada com confiança suficiente offline."
+        message: "A IA local não conseguiu identificar a praga com clareza. Tente melhorar a iluminação ou use a versão online."
       };
     }
 
@@ -332,89 +337,63 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   }
 
   // Lógica Online (Gemini API)
-  const apiKey = process.env.GEMINI_API_KEY || "";
-  console.log("Iniciando análise online. API Key presente:", !!apiKey);
+  const apiKey = process.env.GEMINI_API_KEY || (window as any).VITE_GEMINI_API_KEY || "";
   
   if (!apiKey || apiKey.length < 5) {
-    console.warn("API Key ausente ou inválida. Tentando offline...");
-    if (!elementToUse) {
-      return {
-        pestFound: false,
-        confidence: 0,
-        message: "Erro ao processar imagem para análise offline (API Key ausente)."
-      };
-    }
-    return await analyzeOffline(elementToUse);
+    console.warn("API Key ausente. Tentando offline...");
+    if (elementToUse) return await analyzeOffline(elementToUse);
+    return { pestFound: false, confidence: 0, message: "Sem conexão e sem imagem para análise local." };
   }
   
   const ai = new GoogleGenAI({ apiKey });
   
   try {
-    console.log("Chamando Gemini API...");
+    console.log("Iniciando análise com Gemini 3.1 Pro + Google Search...");
     return await fetchWithRetry(async () => {
       const apiCall = ai.models.generateContent({
-        model: 'gemini-3-flash-preview', 
+        model: 'gemini-3.1-pro-preview', 
         contents: {
           parts: [
-            { text: "Analise esta imagem e identifique a praga urbana. Forneça uma ficha técnica biológica completa. IMPORTANTE: Preencha TODOS os campos do JSON, especialmente 'members', 'reproduction', 'habits', 'controlMethods', 'physicalMeasures' e 'chemicalMeasures'. Nas medidas químicas, inclua dosagens por 10L de água. Se não encontrar praga, defina 'pestFound' como false." },
+            { text: "Você é um especialista em entomologia urbana e controle de pragas. Analise esta imagem e identifique a praga com precisão. Use o Google Search para verificar informações biológicas recentes e métodos de controle químico atualizados (dosagens por 10L de água). Retorne um JSON estrito seguindo o esquema fornecido. Se não houver praga na imagem, defina 'pestFound' como false." },
             { inlineData: { mimeType: "image/jpeg", data: base64 } }
           ]
         },
         config: { 
           responseMimeType: "application/json", 
           responseSchema: PEST_SCHEMA as any,
-          temperature: 0.1
+          temperature: 0.1,
+          tools: [{ googleSearch: {} }]
         }
       });
 
       const apiTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Timeout na API Gemini")), 20000)
+        setTimeout(() => reject(new Error("Timeout na API Gemini")), 25000)
       );
 
       const response = await Promise.race([apiCall, apiTimeout]) as any;
-      
-      console.log("Resposta da Gemini API recebida.");
       const text = response.text;
-      if (!text) throw new Error("A IA não respondeu.");
-      
-      console.log("Texto da resposta:", text.substring(0, 100) + "...");
+      if (!text) throw new Error("A IA não retornou texto.");
       
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("A IA enviou dados em formato inválido.");
+      if (!jsonMatch) throw new Error("Formato de resposta inválido.");
       
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        console.log("JSON parseado com sucesso.");
-        if (parsed.pest) {
-          parsed.pest.controlMethods = parsed.pest.controlMethods || [];
-          parsed.pest.physicalMeasures = parsed.pest.physicalMeasures || [];
-          parsed.pest.chemicalMeasures = parsed.pest.chemicalMeasures || [];
-          parsed.pest.characteristics = parsed.pest.characteristics || [];
-        }
-        return parsed;
-      } catch (e) {
-        console.warn("Erro ao parsear JSON, tentando limpeza...", e);
-        const cleaned = jsonMatch[0].replace(/,\s*([\]}])/g, '$1');
-        return JSON.parse(cleaned);
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.pest) {
+        // Garante que campos de lista existam
+        parsed.pest.controlMethods = parsed.pest.controlMethods || [];
+        parsed.pest.physicalMeasures = parsed.pest.physicalMeasures || [];
+        parsed.pest.chemicalMeasures = parsed.pest.chemicalMeasures || [];
+        parsed.pest.characteristics = parsed.pest.characteristics || [];
       }
+      return parsed;
     }, 2);
   } catch (err: any) {
-    console.error("Erro na análise online:", err);
-    // Se falhar online (ex: sem internet real mas onLine=true), tenta offline
-    console.warn("Falha online, tentando offline...", err.message);
+    console.error("Erro crítico na análise online:", err);
     
-    // Fallback agressivo para offline em caso de qualquer erro de rede ou timeout
-    const isNetworkError = err.message?.includes("fetch") || 
-                          err.message?.includes("network") || 
-                          err.message?.includes("Timeout") || 
-                          err.message?.includes("429") || 
-                          err.message?.includes("503");
-
-    if (isNetworkError || !navigator.onLine) {
-       if (elementToUse) {
-         console.log("🔄 Fallback para análise offline ativado.");
-         return await analyzeOffline(elementToUse);
-       }
+    // Se falhar online, o fallback offline deve ser a última opção
+    if (elementToUse) {
+      console.log("🔄 Acionando motor de emergência offline...");
+      return await analyzeOffline(elementToUse);
     }
     throw err;
   }
