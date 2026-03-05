@@ -332,14 +332,11 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   }
 
   // Lógica Online (Gemini API)
-  const apiKey = (
-    (import.meta as any).env?.VITE_GEMINI_API_KEY || 
-    process.env.GEMINI_API_KEY || 
-    ""
-  ).trim();
+  const apiKey = process.env.GEMINI_API_KEY || "";
+  console.log("Iniciando análise online. API Key presente:", !!apiKey);
   
   if (!apiKey || apiKey.length < 5) {
-    // Se não tem API Key, tenta offline direto
+    console.warn("API Key ausente ou inválida. Tentando offline...");
     if (!elementToUse) {
       return {
         pestFound: false,
@@ -353,8 +350,9 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   const ai = new GoogleGenAI({ apiKey });
   
   try {
+    console.log("Chamando Gemini API...");
     return await fetchWithRetry(async () => {
-      const response = await ai.models.generateContent({
+      const apiCall = ai.models.generateContent({
         model: 'gemini-3-flash-preview', 
         contents: {
           parts: [
@@ -368,15 +366,25 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
           temperature: 0.1
         }
       });
+
+      const apiTimeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout na API Gemini")), 20000)
+      );
+
+      const response = await Promise.race([apiCall, apiTimeout]) as any;
       
+      console.log("Resposta da Gemini API recebida.");
       const text = response.text;
       if (!text) throw new Error("A IA não respondeu.");
+      
+      console.log("Texto da resposta:", text.substring(0, 100) + "...");
       
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("A IA enviou dados em formato inválido.");
       
       try {
         const parsed = JSON.parse(jsonMatch[0]);
+        console.log("JSON parseado com sucesso.");
         if (parsed.pest) {
           parsed.pest.controlMethods = parsed.pest.controlMethods || [];
           parsed.pest.physicalMeasures = parsed.pest.physicalMeasures || [];
@@ -385,27 +393,35 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
         }
         return parsed;
       } catch (e) {
+        console.warn("Erro ao parsear JSON, tentando limpeza...", e);
         const cleaned = jsonMatch[0].replace(/,\s*([\]}])/g, '$1');
         return JSON.parse(cleaned);
       }
-    });
+    }, 2);
   } catch (err: any) {
+    console.error("Erro na análise online:", err);
     // Se falhar online (ex: sem internet real mas onLine=true), tenta offline
     console.warn("Falha online, tentando offline...", err.message);
-    if (err.message?.includes("fetch") || !navigator.onLine) {
-       if (!elementToUse) throw err; // Se nem temos a imagem, repassa o erro original
-       return await analyzeOffline(elementToUse);
+    
+    // Fallback agressivo para offline em caso de qualquer erro de rede ou timeout
+    const isNetworkError = err.message?.includes("fetch") || 
+                          err.message?.includes("network") || 
+                          err.message?.includes("Timeout") || 
+                          err.message?.includes("429") || 
+                          err.message?.includes("503");
+
+    if (isNetworkError || !navigator.onLine) {
+       if (elementToUse) {
+         console.log("🔄 Fallback para análise offline ativado.");
+         return await analyzeOffline(elementToUse);
+       }
     }
     throw err;
   }
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
-  const apiKey = (
-    (import.meta as any).env?.VITE_GEMINI_API_KEY || 
-    process.env.GEMINI_API_KEY || 
-    ""
-  ).trim();
+  const apiKey = process.env.GEMINI_API_KEY || "";
   if (!apiKey) throw new Error("Configuração: API Key não encontrada.");
   const ai = new GoogleGenAI({ apiKey });
   
