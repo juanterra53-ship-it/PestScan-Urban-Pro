@@ -225,12 +225,12 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     tensor.dispose();
     if (predictions.dispose) predictions.dispose();
 
-    // Rigor extremo para offline: 85% de confiança mínima
-    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.85) {
+    // Equilíbrio: 65% de confiança mínima para offline
+    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.65) {
       return {
         pestFound: false,
         confidence: maxScore,
-        message: "A IA local não tem certeza sobre esta praga. Por favor, conecte-se à internet para uma análise precisa via satélite/web."
+        message: "A IA local não tem certeza. Por favor, use uma foto mais clara ou conecte-se à internet."
       };
     }
 
@@ -338,79 +338,51 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   }
 
   // Lógica Online (Gemini API)
-  // Tentativa de obter a chave de múltiplas fontes para garantir prioridade online
-  const apiKey = process.env.GEMINI_API_KEY || 
-                 (window as any).GEMINI_API_KEY || 
-                 (window as any).VITE_GEMINI_API_KEY || "";
+  const apiKey = process.env.GEMINI_API_KEY || (window as any).VITE_GEMINI_API_KEY || "";
   
-  console.log("DEBUG IA: Iniciando análise. Chave detectada:", !!apiKey);
-
   if (!apiKey || apiKey.length < 5) {
-    console.warn("DEBUG IA: API Key ausente. Fallback para offline...");
+    console.warn("DEBUG IA: API Key ausente. Tentando offline...");
     if (elementToUse) return await analyzeOffline(elementToUse);
-    return { 
-      pestFound: false, 
-      confidence: 0, 
-      message: "Erro: Chave de API não configurada. Verifique as configurações do projeto." 
-    };
+    return { pestFound: false, confidence: 0, message: "API Key não configurada." };
   }
   
   const ai = new GoogleGenAI({ apiKey });
   
   try {
-    console.log("DEBUG IA: Chamando Gemini 3.1 Pro com Google Search...");
+    console.log("DEBUG IA: Chamando Gemini 3-Flash...");
     return await fetchWithRetry(async () => {
-      const apiCall = ai.models.generateContent({
-        model: 'gemini-3.1-pro-preview', 
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview', 
         contents: {
           parts: [
-            { text: "Você é um especialista em entomologia urbana. Analise esta imagem e identifique a praga. Use o Google Search para confirmar a espécie e métodos de controle. Retorne APENAS o JSON conforme o esquema. Se não for uma praga ou a imagem estiver ruim, defina 'pestFound' como false." },
+            { text: "Identifique a praga nesta imagem. Retorne um JSON com 'pestFound' (boolean), 'confidence' (0-1) e o objeto 'pest' com: name, scientificName, category, riskLevel, habits, reproduction, controlMethods (array), physicalMeasures (array), chemicalMeasures (array com dosagens por 10L). Se não for praga, pestFound=false." },
             { inlineData: { mimeType: "image/jpeg", data: base64 } }
           ]
         },
         config: { 
           responseMimeType: "application/json", 
           responseSchema: PEST_SCHEMA as any,
-          temperature: 0.1,
-          tools: [{ googleSearch: {} }]
+          temperature: 0.1
         }
       });
 
-      // Aumentamos o timeout para 35s para dar tempo da pesquisa web completar
-      const apiTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("A pesquisa online demorou demais (Timeout)")), 35000)
-      );
-
-      const response = await Promise.race([apiCall, apiTimeout]) as any;
       const text = response.text;
-      
-      if (!text) throw new Error("A IA retornou uma resposta vazia.");
+      if (!text) throw new Error("Resposta vazia da IA.");
       
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("A IA não gerou um formato de dados válido.");
+      if (!jsonMatch) throw new Error("JSON inválido.");
       
       const parsed = JSON.parse(jsonMatch[0]);
-      console.log("DEBUG IA: Sucesso Online!", parsed.pest?.name);
+      console.log("DEBUG IA: Sucesso!", parsed.pest?.name);
       return parsed;
-    }, 2); // 2 tentativas antes de desistir
+    }, 2);
   } catch (err: any) {
-    console.error("DEBUG IA: Falha crítica online:", err.message);
-    
-    // Só vai para o offline se for erro de rede ou timeout
-    const isRetryable = err.message?.includes("Timeout") || 
-                        err.message?.includes("fetch") || 
-                        err.message?.includes("network");
-
-    if (isRetryable && elementToUse) {
-      console.log("DEBUG IA: Tentando motor offline como última alternativa...");
+    console.error("DEBUG IA: Erro online:", err.message);
+    if (elementToUse) {
+      console.log("DEBUG IA: Fallback para offline...");
       return await analyzeOffline(elementToUse);
     }
-    
-    return {
-      pestFound: false,
-      confidence: 0,
-      message: `Erro na análise online: ${err.message}. Tente novamente em alguns instantes.`
-    };
+    throw err;
   }
 };
 
