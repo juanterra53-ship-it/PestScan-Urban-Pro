@@ -103,7 +103,7 @@ export const loadLocalModel = async () => {
     
     try {
       // Verifica se o model.json existe
-      const checkTfjs = await fetch(tfjsModelUrl, { method: 'HEAD' });
+      const checkTfjs = await fetch(tfjsModelUrl, { method: 'HEAD' }).catch(() => ({ ok: false }));
       if (checkTfjs.ok) {
         console.log("📡 Detectado model.json. Carregando via tf.loadGraphModel...");
         localModel = await tf.loadGraphModel(tfjsModelUrl);
@@ -117,13 +117,13 @@ export const loadLocalModel = async () => {
 
     // Fallback para o .tflite
     try {
-      const checkTflite = await fetch(tfliteModelUrl, { method: 'HEAD' });
+      const checkTflite = await fetch(tfliteModelUrl, { method: 'HEAD' }).catch(() => ({ ok: false }));
       if (checkTflite.ok) {
         console.log(`📡 Detectado .tflite em ${tfliteModelUrl}. Carregando...`);
         localModel = await tflite.loadTFLiteModel(tfliteModelUrl);
         console.log("✅ Modelo TFLite carregado com sucesso!");
       } else {
-        console.warn("⚠️ Nenhum modelo encontrado. Por favor, coloque o arquivo 'modelo_barata.tflite' na pasta /public/model/");
+        console.warn("⚠️ Nenhum modelo encontrado ou dispositivo offline.");
       }
     } catch (e) {
       console.warn("❌ Erro ao carregar arquivo .tflite:", e);
