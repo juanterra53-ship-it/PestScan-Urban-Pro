@@ -905,7 +905,15 @@ const App: React.FC = () => {
   };
 
   const forceRefresh = async () => {
+    if (!navigator.onLine) {
+      alert("Você precisa estar ONLINE para resetar o app e baixar a nova versão.");
+      return;
+    }
+
+    if (!confirm("Isso irá apagar a versão antiga e baixar a nova. Deseja continuar?")) return;
+
     try {
+      setLoading(true);
       // Limpa Service Workers
       if ('serviceWorker' in navigator) {
         const registrations = await navigator.serviceWorker.getRegistrations();
@@ -920,11 +928,12 @@ const App: React.FC = () => {
           await caches.delete(name);
         }
       }
-      // Limpa LocalStorage (opcional, mas ajuda no debug)
-      // localStorage.clear();
+      
+      // Pequeno delay para garantir a limpeza
+      await new Promise(r => setTimeout(r, 1000));
       
       // Recarrega a página forçando o servidor
-      window.location.reload();
+      window.location.href = window.location.origin + '?v=' + Date.now();
     } catch (e) {
       window.location.reload();
     }
@@ -1518,13 +1527,8 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 const container = document.getElementById('root');
 if (container) {
-  // Registro do Service Worker para PWA
-  const updateSW = registerSW({
-    onNeedRefresh() {
-      if (confirm('Nova versão disponível! Deseja atualizar?')) {
-        updateSW(true);
-      }
-    },
+  // Registro do Service Worker para PWA (AutoUpdate)
+  registerSW({
     onOfflineReady() {
       console.log('App pronto para uso offline!');
     },
