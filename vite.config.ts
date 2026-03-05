@@ -29,7 +29,23 @@ export default defineConfig(({ mode }) => {
         workbox: {
           cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,json,tflite}'],
-          maximumFileSizeToCacheInBytes: 50000000 // Aumentado para 50MB para suportar modelos TFLite grandes
+          maximumFileSizeToCacheInBytes: 50000000, // Aumentado para 50MB para suportar modelos TFLite grandes
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'external-cdn-cache',
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 60 * 60 * 24 * 365 // 1 ano
+                },
+                cacheableResponse: {
+                  statuses: [0, 200]
+                }
+              }
+            }
+          ]
         },
         manifest: {
           name: 'PestScan Pro',
