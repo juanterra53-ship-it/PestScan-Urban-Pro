@@ -25,11 +25,12 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
       VitePWA({
-        registerType: 'prompt',
+        registerType: 'autoUpdate',
+        includeAssets: ['model/modelo_barata.tflite', 'favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
         workbox: {
           cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,json,tflite}'],
-          maximumFileSizeToCacheInBytes: 50000000, // Aumentado para 50MB para suportar modelos TFLite grandes
+          maximumFileSizeToCacheInBytes: 50000000, // 50MB
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/.*/i,
@@ -56,14 +57,16 @@ export default defineConfig(({ mode }) => {
           display: 'standalone',
           icons: [
             {
-              src: 'icon-192x192.png',
+              src: 'https://picsum.photos/192/192',
               sizes: '192x192',
-              type: 'image/png'
+              type: 'image/png',
+              purpose: 'any'
             },
             {
-              src: 'icon-512x512.png',
+              src: 'https://picsum.photos/512/512',
               sizes: '512x512',
-              type: 'image/png'
+              type: 'image/png',
+              purpose: 'any'
             }
           ]
         }
