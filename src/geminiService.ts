@@ -256,23 +256,34 @@ const getEnv = (key: string) => {
 };
 
 export const analyzePestImage = async (base64: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
-  // Verificação Híbrida: Online vs Offline
-  if (!navigator.onLine) {
-    console.log("Dispositivo offline. Tentando análise local...");
-    
-    let elementToUse = imageElement;
-    
-    // Se não temos o elemento, criamos um a partir do base64
-    if (!elementToUse) {
+  // Prepara o elemento para análise (seja online ou offline)
+  let elementToUse = imageElement;
+  
+  // Se não temos o elemento, criamos um a partir do base64
+  if (!elementToUse) {
+    try {
       elementToUse = await new Promise<HTMLImageElement>((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve(img);
         img.onerror = reject;
         img.src = `data:image/jpeg;base64,${base64}`;
       });
+    } catch (e) {
+      console.error("Erro ao converter base64 para imagem:", e);
     }
+  }
 
-    return await analyzeOffline(elementToUse!);
+  // Verificação Híbrida: Online vs Offline
+  if (!navigator.onLine) {
+    console.log("Dispositivo offline. Tentando análise local...");
+    if (!elementToUse) {
+      return {
+        pestFound: false,
+        confidence: 0,
+        message: "Erro ao processar imagem para análise offline."
+      };
+    }
+    return await analyzeOffline(elementToUse);
   }
 
   // Lógica Online (Gemini API)
@@ -284,7 +295,14 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   
   if (!apiKey || apiKey.length < 5) {
     // Se não tem API Key, tenta offline direto
-    return await analyzeOffline(elementToUse!);
+    if (!elementToUse) {
+      return {
+        pestFound: false,
+        confidence: 0,
+        message: "Erro ao processar imagem para análise offline (API Key ausente)."
+      };
+    }
+    return await analyzeOffline(elementToUse);
   }
   
   const ai = new GoogleGenAI({ apiKey });
@@ -330,7 +348,8 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
     // Se falhar online (ex: sem internet real mas onLine=true), tenta offline
     console.warn("Falha online, tentando offline...", err.message);
     if (err.message?.includes("fetch") || !navigator.onLine) {
-       return await analyzeOffline(elementToUse!);
+       if (!elementToUse) throw err; // Se nem temos a imagem, repassa o erro original
+       return await analyzeOffline(elementToUse);
     }
     throw err;
   }
