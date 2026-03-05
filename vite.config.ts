@@ -26,12 +26,14 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['model/modelo_barata.tflite'],
+        includeAssets: ['model/modelo_barata.tflite', 'favicon.ico', 'robots.txt', 'apple-touch-icon.png'],
         workbox: {
           cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
           navigateFallback: 'index.html',
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,json,tflite}'],
-          maximumFileSizeToCacheInBytes: 100000000, // 100MB
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,json,tflite,wasm}'],
+          maximumFileSizeToCacheInBytes: 100 * 1024 * 1024, // 100MB
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/.*/i,
@@ -39,11 +41,22 @@ export default defineConfig(({ mode }) => {
               options: {
                 cacheName: 'external-cdn-cache',
                 expiration: {
-                  maxEntries: 10,
+                  maxEntries: 100,
                   maxAgeSeconds: 60 * 60 * 24 * 365 // 1 ano
                 },
                 cacheableResponse: {
                   statuses: [0, 200]
+                }
+              }
+            },
+            {
+              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'google-fonts-cache',
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 60 * 60 * 24 * 365
                 }
               }
             }
