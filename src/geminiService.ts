@@ -99,7 +99,7 @@ export const loadLocalModel = async () => {
     // Prioridade 2: modelo_barata.tflite (formato TFLite direto)
     
     const tfjsModelUrl = '/model/model.json';
-    const tfliteModelUrl = `/model/modelo_barata.tflite?v=${Date.now()}`;
+    const tfliteModelUrl = '/model/modelo_barata.tflite';
     
     try {
       // Verifica se o model.json existe
