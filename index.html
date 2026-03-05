@@ -11,22 +11,24 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="msapplication-navbutton-color" content="#022c22">
     <meta name="apple-mobile-web-app-status-bar-style" content="#022c22">
-    
-    <!-- Bibliotecas de IA (TensorFlow) -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/tf-tflite.min.js"></script>
-    
-    <!-- Fontes -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/tf-tflite.min.js" crossorigin="anonymous"></script>
+    <script>
+        window.addEventListener('load', () => {
+            if (typeof tf === 'undefined' || typeof tflite === 'undefined') {
+                console.error('Falha ao carregar bibliotecas do TensorFlow.js via CDN.');
+                const overlay = document.getElementById('error-overlay');
+                if (overlay && !navigator.onLine) {
+                    overlay.innerHTML = '<div style="position:fixed;top:0;left:0;width:100%;background:#ef4444;color:white;padding:10px;text-align:center;z-index:9999;font-size:12px;">Modo Offline: Bibliotecas de IA não encontradas no cache. Conecte-se à internet uma vez para sincronizar.</div>';
+                }
+            }
+        });
+    </script>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
-    <!-- Overlay para erros críticos de carregamento -->
     <div id="error-overlay"></div>
-    
-    <!-- Container principal do React -->
     <div id="root"></div>
-    
-    <!-- Ponto de entrada do aplicativo -->
     <script type="module" src="/src/index.tsx"></script>
 </body>
 </html>
