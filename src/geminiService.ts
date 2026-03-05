@@ -225,11 +225,12 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     tensor.dispose();
     if (predictions.dispose) predictions.dispose();
 
-    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.6) {
+    // Rigor extremo para offline: 85% de confiança mínima
+    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.85) {
       return {
         pestFound: false,
         confidence: maxScore,
-        message: "A IA local não conseguiu identificar a praga com clareza. Tente melhorar a iluminação ou use a versão online."
+        message: "A IA local não tem certeza sobre esta praga. Por favor, conecte-se à internet para uma análise precisa via satélite/web."
       };
     }
 
@@ -337,24 +338,33 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   }
 
   // Lógica Online (Gemini API)
-  const apiKey = process.env.GEMINI_API_KEY || (window as any).VITE_GEMINI_API_KEY || "";
+  // Tentativa de obter a chave de múltiplas fontes para garantir prioridade online
+  const apiKey = process.env.GEMINI_API_KEY || 
+                 (window as any).GEMINI_API_KEY || 
+                 (window as any).VITE_GEMINI_API_KEY || "";
   
+  console.log("DEBUG IA: Iniciando análise. Chave detectada:", !!apiKey);
+
   if (!apiKey || apiKey.length < 5) {
-    console.warn("API Key ausente. Tentando offline...");
+    console.warn("DEBUG IA: API Key ausente. Fallback para offline...");
     if (elementToUse) return await analyzeOffline(elementToUse);
-    return { pestFound: false, confidence: 0, message: "Sem conexão e sem imagem para análise local." };
+    return { 
+      pestFound: false, 
+      confidence: 0, 
+      message: "Erro: Chave de API não configurada. Verifique as configurações do projeto." 
+    };
   }
   
   const ai = new GoogleGenAI({ apiKey });
   
   try {
-    console.log("Iniciando análise com Gemini 3.1 Pro + Google Search...");
+    console.log("DEBUG IA: Chamando Gemini 3.1 Pro com Google Search...");
     return await fetchWithRetry(async () => {
       const apiCall = ai.models.generateContent({
         model: 'gemini-3.1-pro-preview', 
         contents: {
           parts: [
-            { text: "Você é um especialista em entomologia urbana e controle de pragas. Analise esta imagem e identifique a praga com precisão. Use o Google Search para verificar informações biológicas recentes e métodos de controle químico atualizados (dosagens por 10L de água). Retorne um JSON estrito seguindo o esquema fornecido. Se não houver praga na imagem, defina 'pestFound' como false." },
+            { text: "Você é um especialista em entomologia urbana. Analise esta imagem e identifique a praga. Use o Google Search para confirmar a espécie e métodos de controle. Retorne APENAS o JSON conforme o esquema. Se não for uma praga ou a imagem estiver ruim, defina 'pestFound' como false." },
             { inlineData: { mimeType: "image/jpeg", data: base64 } }
           ]
         },
@@ -366,36 +376,41 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
         }
       });
 
+      // Aumentamos o timeout para 35s para dar tempo da pesquisa web completar
       const apiTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Timeout na API Gemini")), 25000)
+        setTimeout(() => reject(new Error("A pesquisa online demorou demais (Timeout)")), 35000)
       );
 
       const response = await Promise.race([apiCall, apiTimeout]) as any;
       const text = response.text;
-      if (!text) throw new Error("A IA não retornou texto.");
+      
+      if (!text) throw new Error("A IA retornou uma resposta vazia.");
       
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("Formato de resposta inválido.");
+      if (!jsonMatch) throw new Error("A IA não gerou um formato de dados válido.");
       
       const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.pest) {
-        // Garante que campos de lista existam
-        parsed.pest.controlMethods = parsed.pest.controlMethods || [];
-        parsed.pest.physicalMeasures = parsed.pest.physicalMeasures || [];
-        parsed.pest.chemicalMeasures = parsed.pest.chemicalMeasures || [];
-        parsed.pest.characteristics = parsed.pest.characteristics || [];
-      }
+      console.log("DEBUG IA: Sucesso Online!", parsed.pest?.name);
       return parsed;
-    }, 2);
+    }, 2); // 2 tentativas antes de desistir
   } catch (err: any) {
-    console.error("Erro crítico na análise online:", err);
+    console.error("DEBUG IA: Falha crítica online:", err.message);
     
-    // Se falhar online, o fallback offline deve ser a última opção
-    if (elementToUse) {
-      console.log("🔄 Acionando motor de emergência offline...");
+    // Só vai para o offline se for erro de rede ou timeout
+    const isRetryable = err.message?.includes("Timeout") || 
+                        err.message?.includes("fetch") || 
+                        err.message?.includes("network");
+
+    if (isRetryable && elementToUse) {
+      console.log("DEBUG IA: Tentando motor offline como última alternativa...");
       return await analyzeOffline(elementToUse);
     }
-    throw err;
+    
+    return {
+      pestFound: false,
+      confidence: 0,
+      message: `Erro na análise online: ${err.message}. Tente novamente em alguns instantes.`
+    };
   }
 };
 
