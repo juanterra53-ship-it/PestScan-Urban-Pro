@@ -26,11 +26,12 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['model/modelo_barata.tflite', 'favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+        includeAssets: ['model/modelo_barata.tflite'],
         workbox: {
           cleanupOutdatedCaches: true,
+          navigateFallback: 'index.html',
           globPatterns: ['**/*.{js,css,html,ico,png,svg,json,tflite}'],
-          maximumFileSizeToCacheInBytes: 50000000, // 50MB
+          maximumFileSizeToCacheInBytes: 100000000, // 100MB
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/.*/i,
@@ -55,15 +56,17 @@ export default defineConfig(({ mode }) => {
           theme_color: '#022c22',
           background_color: '#022c22',
           display: 'standalone',
+          start_url: '/',
+          scope: '/',
           icons: [
             {
-              src: 'https://picsum.photos/192/192',
+              src: 'https://picsum.photos/192/192?random=1',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any'
             },
             {
-              src: 'https://picsum.photos/512/512',
+              src: 'https://picsum.photos/512/512?random=2',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any'
