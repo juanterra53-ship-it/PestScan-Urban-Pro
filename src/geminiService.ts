@@ -71,7 +71,9 @@ const fetchWithRetry = async (fn: () => Promise<any>, retries = 5): Promise<any>
 
 let localModel: any = null;
 let isModelLoading = false;
+let modelStatus = "Inativo";
 
+export const getModelStatus = () => modelStatus;
 export const isLocalModelLoaded = () => !!localModel;
 
 // Labels correspondentes ao seu modelo treinado. 
@@ -87,56 +89,64 @@ const MODEL_LABELS = [
 
 export const loadLocalModel = async () => {
   if (typeof tf === 'undefined' || typeof tflite === 'undefined') {
+    modelStatus = "Erro: Bibliotecas não carregadas";
     console.warn("TensorFlow.js não carregado. Verifique a conexão.");
     return;
   }
   if (localModel || isModelLoading) return;
   isModelLoading = true;
+  modelStatus = "Carregando...";
+  
   try {
     console.log("Iniciando carregamento do modelo local...");
-    
-    // Aguarda o TensorFlow.js inicializar completamente
     await tf.ready();
     
-    // Tenta carregar o modelo. 
-    // Prioridade 1: model.json (formato TF.js nativo - mais estável)
-    // Prioridade 2: modelo_barata.tflite (formato TFLite direto)
-    
-    const tfjsModelUrl = '/model/model.json';
     const tfliteModelUrl = '/model/modelo_barata.tflite';
+    const tfjsModelUrl = '/model/model.json';
     
+    // Tenta carregar o TFLite primeiro
     try {
-      // Verifica se o model.json existe
-      const checkTfjs = await fetch(tfjsModelUrl, { method: 'HEAD' }).catch(() => ({ ok: false }));
-      if (checkTfjs.ok) {
-        console.log("📡 Detectado model.json. Carregando via tf.loadGraphModel...");
-        localModel = await tf.loadGraphModel(tfjsModelUrl);
-        console.log("✅ Modelo TF.js carregado com sucesso!");
-        isModelLoading = false;
-        return;
+      modelStatus = "Carregando TFLite...";
+      console.log(`📡 Tentando carregar TFLite: ${tfliteModelUrl}`);
+      
+      if (tflite.setWasmPath) {
+        const wasmPath = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/';
+        console.log(`🔗 Configurando WASM Path: ${wasmPath}`);
+        tflite.setWasmPath(wasmPath);
       }
-    } catch (e) {
-      console.log("ℹ️ model.json não encontrado, tentando .tflite...");
+
+      // Adiciona um timeout real para o carregamento do modelo
+      const loadPromise = tflite.loadTFLiteModel(tfliteModelUrl);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout ao baixar modelo")), 15000)
+      );
+
+      localModel = await Promise.race([loadPromise, timeoutPromise]);
+      console.log("✅ Modelo TFLite carregado com sucesso!");
+      modelStatus = "Ativo (TFLite)";
+      return;
+    } catch (e: any) {
+      console.warn("ℹ️ Falha ao carregar .tflite:", e.message);
+      modelStatus = `Erro TFLite: ${e.message.substring(0, 20)}...`;
     }
 
-    // Fallback para o .tflite
+    // Fallback para o TF.js GraphModel
     try {
-      const checkTflite = await fetch(tfliteModelUrl, { method: 'HEAD' }).catch(() => ({ ok: false }));
-      if (checkTflite.ok) {
-        console.log(`📡 Detectado .tflite em ${tfliteModelUrl}. Carregando...`);
-        localModel = await tflite.loadTFLiteModel(tfliteModelUrl);
-        console.log("✅ Modelo TFLite carregado com sucesso!");
-      } else {
-        console.warn("⚠️ Nenhum modelo encontrado ou dispositivo offline.");
-      }
-    } catch (e) {
-      console.warn("❌ Erro ao carregar arquivo .tflite:", e);
+      modelStatus = "Tentando Fallback TFJS...";
+      console.log(`📡 Tentando fallback para TF.js: ${tfjsModelUrl}`);
+      localModel = await tf.loadGraphModel(tfjsModelUrl);
+      console.log("✅ Modelo TF.js carregado com sucesso!");
+      modelStatus = "Ativo (TFJS)";
+    } catch (e: any) {
+      console.error("❌ Erro crítico: Nenhum modelo local pôde ser carregado offline.", e.message);
+      modelStatus = "Erro: Falha Total";
     }
 
   } catch (error: any) {
     const msg = error.message || "";
     console.warn("Aviso: Não foi possível inicializar o modelo offline:", msg);
     console.error("Erro detalhado:", error);
+    modelStatus = "Erro de Inicialização";
   } finally {
     isModelLoading = false;
   }
@@ -179,21 +189,23 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     const scores = await predictions.data();
     const scoresArray = Array.from(scores) as number[];
+    console.log("Scores Offline:", scoresArray);
     
     let maxScoreIndex = 0;
     let maxScore = 0;
     let predictedLabel = "Nenhuma Praga";
 
-    if (scoresArray.length === 1) {
-      maxScore = scoresArray[0];
-      if (maxScore > 0.5) {
-        maxScoreIndex = 0;
-        predictedLabel = MODEL_LABELS[0];
+    if (scoresArray.length > 0) {
+      maxScore = Math.max(...scoresArray);
+      maxScoreIndex = scoresArray.indexOf(maxScore);
+      
+      // Garante que o index existe no MODEL_LABELS
+      if (maxScoreIndex < MODEL_LABELS.length) {
+        predictedLabel = MODEL_LABELS[maxScoreIndex].trim();
+      } else {
+        console.warn(`Index ${maxScoreIndex} fora do limite de MODEL_LABELS (${MODEL_LABELS.length})`);
+        predictedLabel = "Praga Desconhecida";
       }
-    } else {
-      maxScoreIndex = scoresArray.indexOf(Math.max(...scoresArray));
-      maxScore = scoresArray[maxScoreIndex];
-      predictedLabel = MODEL_LABELS[maxScoreIndex];
     }
 
     // Limpeza de memória
