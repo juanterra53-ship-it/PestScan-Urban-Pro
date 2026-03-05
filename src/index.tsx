@@ -909,12 +909,19 @@ const App: React.FC = () => {
   };
 
   const forceRefresh = async () => {
-    if (!navigator.onLine) {
+    // Verifica conectividade real antes de apagar tudo
+    try {
+      const ping = await fetch('/favicon.ico', { method: 'HEAD', cache: 'no-store' }).catch(() => ({ ok: false }));
+      if (!ping.ok) {
+        alert("Sua conexão com a internet parece instável ou inexistente. Você precisa estar ONLINE para resetar o app com segurança.");
+        return;
+      }
+    } catch (e) {
       alert("Você precisa estar ONLINE para resetar o app e baixar a nova versão.");
       return;
     }
 
-    if (!confirm("Isso irá apagar a versão antiga e baixar a nova. Deseja continuar?")) return;
+    if (!confirm("ATENÇÃO: Este procedimento irá apagar a versão atual do seu celular e baixar a versão mais recente do servidor. \n\nVocê deve estar com uma conexão ESTÁVEL de internet, caso contrário o app poderá parar de funcionar até que você se conecte novamente. \n\nDeseja continuar?")) return;
 
     try {
       setLoading(true);
