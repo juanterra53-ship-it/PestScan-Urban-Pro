@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig(({ mode }) => {
   // Carrega variáveis de ambiente baseadas no modo atual (development/production)
@@ -22,12 +23,13 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      tailwindcss(),
       VitePWA({
         registerType: 'prompt',
         workbox: {
           cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,json,tflite}'],
-          maximumFileSizeToCacheInBytes: 10000000 // 10MB para permitir o modelo tflite
+          maximumFileSizeToCacheInBytes: 50000000 // Aumentado para 50MB para suportar modelos TFLite grandes
         },
         manifest: {
           name: 'PestScan Pro',
