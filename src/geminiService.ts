@@ -86,10 +86,14 @@ const MODEL_LABELS = [
 ];
 
 export const loadLocalModel = async () => {
+  if (typeof tf === 'undefined' || typeof tflite === 'undefined') {
+    console.warn("TensorFlow.js não carregado. Verifique a conexão.");
+    return;
+  }
   if (localModel || isModelLoading) return;
   isModelLoading = true;
   try {
-    console.log("Iniciando carregamento do modelo local (Caminho 1)...");
+    console.log("Iniciando carregamento do modelo local...");
     
     // Aguarda o TensorFlow.js inicializar completamente
     await tf.ready();
@@ -139,6 +143,13 @@ export const loadLocalModel = async () => {
 };
 
 export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
+  if (typeof tf === 'undefined') {
+    return {
+      pestFound: false,
+      confidence: 0,
+      message: "Modo offline: TensorFlow.js não carregado. Conecte-se à internet para análise."
+    };
+  }
   if (!localModel) {
     console.warn("Modelo offline não carregado.");
     return {
@@ -272,13 +283,14 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   ).trim();
   
   if (!apiKey || apiKey.length < 5) {
-    throw new Error(`Configuração de API pendente.`);
+    // Se não tem API Key, tenta offline direto
+    return await analyzeOffline(elementToUse!);
   }
   
   const ai = new GoogleGenAI({ apiKey });
   
-  return fetchWithRetry(async () => {
-    try {
+  try {
+    return await fetchWithRetry(async () => {
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview', 
         contents: {
@@ -297,13 +309,11 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
       const text = response.text;
       if (!text) throw new Error("A IA não respondeu.");
       
-      // Extração ultra-robusta via Regex
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("A IA enviou dados em formato inválido.");
       
       try {
         const parsed = JSON.parse(jsonMatch[0]);
-        // Garante que campos de array existam para evitar erros no .map()
         if (parsed.pest) {
           parsed.pest.controlMethods = parsed.pest.controlMethods || [];
           parsed.pest.physicalMeasures = parsed.pest.physicalMeasures || [];
@@ -312,15 +322,18 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
         }
         return parsed;
       } catch (e) {
-        // Tenta limpar possíveis vírgulas extras ou caracteres invisíveis
         const cleaned = jsonMatch[0].replace(/,\s*([\]}])/g, '$1');
         return JSON.parse(cleaned);
       }
-    } catch (err: any) {
-      console.error("Erro Gemini Sênior:", err);
-      throw new Error(err.message || "Falha na comunicação com a IA.");
+    });
+  } catch (err: any) {
+    // Se falhar online (ex: sem internet real mas onLine=true), tenta offline
+    console.warn("Falha online, tentando offline...", err.message);
+    if (err.message?.includes("fetch") || !navigator.onLine) {
+       return await analyzeOffline(elementToUse!);
     }
-  });
+    throw err;
+  }
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
