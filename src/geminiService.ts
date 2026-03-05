@@ -1,9 +1,17 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { RecognitionResult } from "./types";
+import { ENCYCLOPEDIA_DATA } from './data/encyclopedia';
 
 // Avisa o TypeScript que o 'tf' e 'tflite' vêm do script no index.html
 declare const tf: any;
 declare const tflite: any;
+
+const normalizeString = (str: string) => 
+  str.toLowerCase()
+     .normalize("NFD")
+     .replace(/[\u0300-\u036f]/g, "")
+     .replace(/[^a-z0-9]/g, "")
+     .trim();
 
 // Configura o caminho para os arquivos WebAssembly do TFLite (necessário para .tflite)
 if (typeof tflite !== 'undefined' && tflite.setWasmPath) {
@@ -219,6 +227,31 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         message: "Nenhuma praga identificada com confiança suficiente offline."
       };
     }
+
+    // Busca dados completos na enciclopédia local
+    const searchName = normalizeString(predictedLabel);
+    console.log(`🔍 Buscando dados locais para: "${predictedLabel}" (Normalizado: "${searchName}")`);
+    
+    const localPest = ENCYCLOPEDIA_DATA.find(p => {
+      const pName = normalizeString(p.name);
+      const pSci = normalizeString(p.details.scientificName);
+      return pName === searchName || pName.includes(searchName) || searchName.includes(pName) || pSci.includes(searchName);
+    });
+
+    if (localPest) {
+      console.log(`✅ Dados encontrados para: ${localPest.name}`);
+      return {
+        pestFound: true,
+        confidence: maxScore,
+        pest: { 
+          ...localPest.details,
+          scientificName: `${localPest.details.scientificName} (Offline)`
+        },
+        message: "Analisado offline com dados da enciclopédia local."
+      };
+    }
+
+    console.warn(`❌ Nenhum dado local encontrado para: ${predictedLabel}`);
 
     return {
       pestFound: true,
