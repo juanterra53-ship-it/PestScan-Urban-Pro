@@ -885,6 +885,10 @@ const App: React.FC = () => {
     const msg = err.message || JSON.stringify(err);
     console.error("Erro detalhado:", err);
     
+    if (msg.includes("fetch") || msg.includes("NetworkError")) {
+      return "Erro de Conexão: Não foi possível acessar a IA Online. Verifique sua internet ou use o Modo Offline.";
+    }
+    
     if (msg.includes("503") || msg.includes("UNAVAILABLE")) return "O servidor de IA está com alta demanda agora. Por favor, aguarde um instante e tente novamente.";
     
     if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
