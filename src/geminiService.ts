@@ -349,33 +349,40 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   const ai = new GoogleGenAI({ apiKey });
   
   try {
-    console.log("DEBUG IA: Chamando Gemini 3-Flash...");
+    console.log("DEBUG IA: Chamando Gemini 3-Flash com Google Search...");
     return await fetchWithRetry(async () => {
-      const response = await ai.models.generateContent({
+      const apiCall = ai.models.generateContent({
         model: 'gemini-3-flash-preview', 
         contents: {
           parts: [
-            { text: "Identifique a praga nesta imagem. Retorne um JSON com 'pestFound' (boolean), 'confidence' (0-1) e o objeto 'pest' com: name, scientificName, category, riskLevel, habits, reproduction, controlMethods (array), physicalMeasures (array), chemicalMeasures (array com dosagens por 10L). Se não for praga, pestFound=false." },
+            { text: "Você é um especialista em entomologia urbana. Analise esta imagem e identifique a praga. Use o Google Search para confirmar a espécie e métodos de controle. Retorne um JSON com 'pestFound' (boolean), 'confidence' (0-1) e o objeto 'pest' com: name, scientificName, category, riskLevel, habits, reproduction, controlMethods (array), physicalMeasures (array), chemicalMeasures (array com dosagens por 10L). Se não for praga, pestFound=false." },
             { inlineData: { mimeType: "image/jpeg", data: base64 } }
           ]
         },
         config: { 
           responseMimeType: "application/json", 
           responseSchema: PEST_SCHEMA as any,
-          temperature: 0.1
+          temperature: 0.1,
+          tools: [{ googleSearch: {} }]
         }
       });
+
+      const apiTimeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout na API Gemini (30s)")), 30000)
+      );
+
+      const response = await Promise.race([apiCall, apiTimeout]) as any;
 
       const text = response.text;
       if (!text) throw new Error("Resposta vazia da IA.");
       
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("JSON inválido.");
+      if (!jsonMatch) throw new Error("JSON não encontrado na resposta.");
       
       const parsed = JSON.parse(jsonMatch[0]);
-      console.log("DEBUG IA: Sucesso!", parsed.pest?.name);
+      console.log("DEBUG IA: Sucesso Online!", parsed.pest?.name);
       return parsed;
-    }, 2);
+    }, 3); // Aumentado para 3 tentativas
   } catch (err: any) {
     console.error("DEBUG IA: Erro online:", err.message);
     if (elementToUse) {
