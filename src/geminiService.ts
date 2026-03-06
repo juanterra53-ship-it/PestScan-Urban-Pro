@@ -432,7 +432,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
 };
 
 export const generatePestAudio = async (text: string): Promise<string | null> => {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getEnv('GEMINI_API_KEY') || getEnv('VITE_GEMINI_API_KEY');
   if (!apiKey) return null;
   const ai = new GoogleGenAI({ apiKey });
   try {
