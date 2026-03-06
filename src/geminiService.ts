@@ -40,6 +40,7 @@ const PEST_SCHEMA = {
         physicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
         chemicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
         healthRisks: { type: Type.STRING },
+        source: { type: Type.STRING, description: "Fonte da informação (ex: 'Pesquisa Google' ou 'Banco de Dados Local')" },
       },
       required: ["name", "scientificName", "category", "riskLevel"]
     }
@@ -225,12 +226,12 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     tensor.dispose();
     if (predictions.dispose) predictions.dispose();
 
-    // Equilíbrio: 65% de confiança mínima para offline
-    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.65) {
+    // Equilíbrio: 55% de confiança mínima para offline
+    if (predictedLabel === "Nenhuma Praga" || maxScore < 0.55) {
       return {
         pestFound: false,
         confidence: maxScore,
-        message: "A IA local não tem certeza. Por favor, use uma foto mais clara ou conecte-se à internet."
+        message: "A IA local não tem certeza. Por favor, use uma foto mais clara ou conecte-se à internet para uma pesquisa profunda."
       };
     }
 
@@ -251,7 +252,8 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         confidence: maxScore,
         pest: { 
           ...localPest.details,
-          scientificName: `${localPest.details.scientificName} (Offline)`
+          scientificName: `${localPest.details.scientificName} (Offline)`,
+          source: "Banco de Dados Local"
         },
         message: "Analisado offline com dados da enciclopédia local."
       };
@@ -338,24 +340,24 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   }
 
   // Lógica Online (Gemini API)
-  const apiKey = process.env.GEMINI_API_KEY || (window as any).VITE_GEMINI_API_KEY || "";
+  const apiKey = getEnv('GEMINI_API_KEY') || getEnv('VITE_GEMINI_API_KEY');
   
   if (!apiKey || apiKey.length < 5) {
-    console.warn("DEBUG IA: API Key ausente. Tentando offline...");
+    console.warn("DEBUG IA: API Key não encontrada no ambiente. Tentando offline...");
     if (elementToUse) return await analyzeOffline(elementToUse);
-    return { pestFound: false, confidence: 0, message: "API Key não configurada." };
+    return { pestFound: false, confidence: 0, message: "IA Online indisponível: Chave de API não configurada." };
   }
   
   const ai = new GoogleGenAI({ apiKey });
   
   try {
-    console.log("DEBUG IA: Chamando Gemini 3-Flash com Google Search...");
+    console.log("DEBUG IA: Chamando Gemini 3.1 Flash Lite com Pesquisa Google...");
     return await fetchWithRetry(async () => {
       const apiCall = ai.models.generateContent({
-        model: 'gemini-3-flash-preview', 
+        model: 'gemini-3.1-flash-lite-preview', 
         contents: {
           parts: [
-            { text: "Você é um especialista em entomologia urbana. Analise esta imagem e identifique a praga. Use o Google Search para confirmar a espécie e métodos de controle. Retorne um JSON com 'pestFound' (boolean), 'confidence' (0-1) e o objeto 'pest' com: name, scientificName, category, riskLevel, habits, reproduction, controlMethods (array), physicalMeasures (array), chemicalMeasures (array com dosagens por 10L). Se não for praga, pestFound=false." },
+            { text: "Você é um especialista em entomologia urbana. Analise esta imagem e identifique a praga. Use a ferramenta Google Search para pesquisar informações biológicas reais, hábitos, reprodução e métodos de controle (físicos e químicos com dosagens por 10L). Retorne um JSON estrito com 'pestFound' (boolean), 'confidence' (0-1) e o objeto 'pest' preenchido com os dados da pesquisa. Se não for uma praga urbana, defina pestFound como false." },
             { inlineData: { mimeType: "image/jpeg", data: base64 } }
           ]
         },
@@ -368,25 +370,28 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
       });
 
       const apiTimeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Timeout na API Gemini (30s)")), 30000)
+        setTimeout(() => reject(new Error("A pesquisa na web demorou demais (35s)")), 35000)
       );
 
       const response = await Promise.race([apiCall, apiTimeout]) as any;
 
       const text = response.text;
-      if (!text) throw new Error("Resposta vazia da IA.");
+      if (!text) throw new Error("A IA não retornou dados.");
       
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("JSON não encontrado na resposta.");
+      if (!jsonMatch) throw new Error("Formato de dados da IA inválido.");
       
       const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.pest) {
+        parsed.pest.source = "Pesquisa Google";
+      }
       console.log("DEBUG IA: Sucesso Online!", parsed.pest?.name);
       return parsed;
-    }, 3); // Aumentado para 3 tentativas
+    }, 3);
   } catch (err: any) {
-    console.error("DEBUG IA: Erro online:", err.message);
+    console.error("DEBUG IA: Erro na análise online:", err.message);
     if (elementToUse) {
-      console.log("DEBUG IA: Fallback para offline...");
+      console.log("DEBUG IA: Acionando motor de emergência offline...");
       return await analyzeOffline(elementToUse);
     }
     throw err;
@@ -394,18 +399,19 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
-  const apiKey = process.env.GEMINI_API_KEY || "";
+  const apiKey = getEnv('GEMINI_API_KEY') || getEnv('VITE_GEMINI_API_KEY');
   if (!apiKey) throw new Error("Configuração: API Key não encontrada.");
   const ai = new GoogleGenAI({ apiKey });
   
   return fetchWithRetry(async () => {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', 
-      contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Preencha TODOS os campos do JSON: nome científico, hábitos, reprodução, membros, métodos de controle físico e químico. IMPORTANTE: Na seção 'chemicalMeasures', forneça o nome do princípio ativo ou produto seguido da dosagem exata por 10 litros de água (ex: 'Bifentrina: 30ml/10L água (Aplicação perimetral)'). Retorne em JSON puro.`,
+      model: 'gemini-3.1-flash-lite-preview', 
+      contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use o Google Search para encontrar dados precisos sobre: nome científico, hábitos, reprodução, membros, métodos de controle físico e químico. IMPORTANTE: Na seção 'chemicalMeasures', forneça o nome do princípio ativo ou produto seguido da dosagem exata por 10 litros de água (ex: 'Bifentrina: 30ml/10L água'). Retorne em JSON puro.`,
       config: { 
         responseMimeType: "application/json", 
         responseSchema: PEST_SCHEMA as any,
-        temperature: 0.1
+        temperature: 0.1,
+        tools: [{ googleSearch: {} }]
       }
     });
     const text = response.text;
@@ -419,6 +425,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
       parsed.pest.controlMethods = parsed.pest.controlMethods || [];
       parsed.pest.physicalMeasures = parsed.pest.physicalMeasures || [];
       parsed.pest.chemicalMeasures = parsed.pest.chemicalMeasures || [];
+      parsed.pest.source = "Pesquisa Google";
     }
     return parsed;
   });
