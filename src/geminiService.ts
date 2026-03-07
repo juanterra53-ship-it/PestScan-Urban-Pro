@@ -294,20 +294,6 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 };
 
 // Função auxiliar para obter variáveis de ambiente de forma segura
-const getEnv = (key: string) => {
-  // @ts-ignore
-  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key]) {
-    // @ts-ignore
-    return import.meta.env[key];
-  }
-  // @ts-ignore
-  if (typeof process !== 'undefined' && process.env && process.env[key]) {
-    // @ts-ignore
-    return process.env[key];
-  }
-  return '';
-};
-
 export const analyzePestImage = async (base64: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
   // Prepara o elemento para análise (seja online ou offline)
   let elementToUse = imageElement;
@@ -340,7 +326,7 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   }
 
   // Lógica Online (Gemini API)
-  const apiKey = getEnv('GEMINI_API_KEY') || getEnv('VITE_GEMINI_API_KEY');
+  const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
   
   if (!apiKey || apiKey.length < 5) {
     console.warn("DEBUG IA: API Key não encontrada no ambiente. Tentando offline...");
@@ -399,7 +385,7 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
-  const apiKey = getEnv('GEMINI_API_KEY') || getEnv('VITE_GEMINI_API_KEY');
+  const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error("Configuração: API Key não encontrada.");
   const ai = new GoogleGenAI({ apiKey });
   
@@ -432,7 +418,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
 };
 
 export const generatePestAudio = async (text: string): Promise<string | null> => {
-  const apiKey = getEnv('GEMINI_API_KEY') || getEnv('VITE_GEMINI_API_KEY');
+  const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
   if (!apiKey) return null;
   const ai = new GoogleGenAI({ apiKey });
   try {
