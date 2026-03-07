@@ -215,7 +215,7 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     // Validação de confiança: se o score for muito baixo ou se todos forem iguais (erro de modelo)
     const allSame = scoresArray.every(s => s === scoresArray[0]);
-    if (maxScoreIndex === -1 || maxScore < 0.65 || allSame) {
+    if (maxScoreIndex === -1 || maxScore < 0.60 || allSame) {
       return {
         pestFound: false,
         confidence: maxScore,
@@ -294,16 +294,24 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
 
   // Prioridade Online: Se houver internet, tentamos SEMPRE o Gemini primeiro
   if (navigator.onLine) {
-    const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '').trim();
+    // Tenta obter a chave de múltiplas fontes (Vite, Process, ou Injeção Direta)
+    const apiKey = (
+      import.meta.env.VITE_GEMINI_API_KEY || 
+      process.env.GEMINI_API_KEY || 
+      (window as any).GEMINI_API_KEY ||
+      ""
+    ).trim();
     
+    console.log("DEBUG IA: Verificando disponibilidade de chave online...");
+
     if (apiKey && apiKey.length > 10) {
       try {
-        console.log("DEBUG IA: Iniciando análise ONLINE com Gemini 3.1 Flash...");
+        console.log("DEBUG IA: Iniciando análise ONLINE com Gemini 3 Flash...");
         const ai = new GoogleGenAI({ apiKey });
         
         return await fetchWithRetry(async () => {
           const response = await ai.models.generateContent({
-            model: 'gemini-3.1-pro-preview', // Usando Pro para maior precisão e melhor uso de ferramentas
+            model: 'gemini-3-flash-preview', // Modelo mais estável e rápido para uso geral
             contents: {
               parts: [
                 { text: "Identifique a praga urbana nesta imagem. Use obrigatoriamente a ferramenta Google Search para buscar informações biológicas ATUALIZADAS, hábitos, reprodução e métodos de controle detalhados (físicos e químicos com dosagens por 10L). Retorne um JSON estrito seguindo o esquema fornecido." },
@@ -326,31 +334,30 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
           
           const parsed = JSON.parse(jsonMatch[0]);
           if (parsed.pest) {
-            parsed.pest.source = "Pesquisa Google (IA Online)";
+            parsed.pest.source = "IA Online (Gemini + Google Search)";
           }
           console.log("✅ Sucesso Online:", parsed.pest?.name);
           return parsed;
-        }, 3);
+        }, 2); // 2 tentativas para evitar lentidão excessiva
       } catch (err: any) {
-        console.warn("⚠️ Falha na análise online, tentando offline como fallback:", err.message);
+        console.warn("⚠️ Falha na análise online (pode ser cota ou chave):", err.message);
         // Se falhar o online, continua para o offline abaixo
       }
     } else {
-      console.warn("⚠️ API Key não configurada ou inválida. Usando motor offline.");
+      console.warn("⚠️ API Key não detectada. Certifique-se de configurá-la nas variáveis de ambiente.");
     }
-  } else {
-    console.log("ℹ️ Dispositivo offline. Usando motor de IA local.");
   }
 
   // Fallback ou Modo Offline
   if (elementToUse) {
+    console.log("ℹ️ Usando motor de IA local (Offline)...");
     return await analyzeOffline(elementToUse);
   }
   
   return { 
     pestFound: false, 
     confidence: 0, 
-    message: "Não foi possível analisar a imagem. Verifique sua conexão." 
+    message: "Não foi possível analisar a imagem. Verifique sua conexão ou configure a chave API." 
   };
 };
 
