@@ -51,7 +51,7 @@ const PEST_SCHEMA = {
 // Função auxiliar para aguardar tempo determinado (Exponential Backoff)
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-const fetchWithRetry = async (fn: () => Promise<any>, retries = 5): Promise<any> => {
+const fetchWithRetry = async (fn: () => Promise<any>, retries = 3): Promise<any> => {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn();
@@ -60,16 +60,16 @@ const fetchWithRetry = async (fn: () => Promise<any>, retries = 5): Promise<any>
       const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
       const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE");
       
-      if ((isRateLimit || isServiceError) && i < retries - 1) {
-        let waitTime = isRateLimit ? 5000 * (i + 1) : 2000 * (i + 1);
-        
-        // Tenta extrair o tempo de espera sugerido pelo Gemini (ex: "Please retry in 42.089s")
-        const retryMatch = msg.match(/retry in ([\d.]+)s/);
-        if (retryMatch && retryMatch[1]) {
-          waitTime = (parseFloat(retryMatch[1]) + 1) * 1000; // Adiciona 1s de margem
-        }
+      if (isRateLimit && i < retries - 1) {
+        // Para 429, esperamos um pouco mais
+        const waitTime = 15000; // 15 segundos é o padrão para o free tier do Gemini
+        console.warn(`Limite de quota atingido. Tentativa ${i + 1} de ${retries}. Aguardando ${waitTime/1000}s...`);
+        await delay(waitTime);
+        continue;
+      }
 
-        console.warn(`IA Ocupada. Tentativa ${i + 1} de ${retries}. Aguardando ${Math.round(waitTime/1000)}s...`);
+      if (isServiceError && i < retries - 1) {
+        const waitTime = 2000 * (i + 1);
         await delay(waitTime);
         continue;
       }
@@ -205,8 +205,8 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     
     // Se o modelo tiver apenas 1 ou 2 saídas, é um modelo binário (ex: Barata vs Não Barata)
     const labelsToUse = scoresArray.length === MODEL_LABELS.length ? MODEL_LABELS : 
-                       scoresArray.length === 1 ? ["Praga Detectada"] :
-                       scoresArray.length === 2 ? ["Praga Detectada", "Nenhuma Praga"] :
+                       scoresArray.length === 1 ? ["Praga (Modelo Local)"] :
+                       scoresArray.length === 2 ? ["Praga (Modelo Local)", "Nenhuma Praga"] :
                        Array.from({length: scoresArray.length}, (_, i) => `Classe ${i}`);
 
     let maxScoreIndex = 0;
@@ -329,84 +329,84 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
     }
   }
 
-  // Prioridade Online: Se houver internet, tentamos SEMPRE o Gemini primeiro
+  // 1. MODO ONLINE: Se houver internet, usamos APENAS o Gemini
   if (navigator.onLine) {
-    console.log("📡 Iniciando Busca Online (Gemini 3 + Google Search)...");
-    const apiKey = (process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || "").trim();
+    console.log("🌐 MODO ONLINE ATIVO: Iniciando Gemini...");
+    const apiKey = (
+      process.env.GEMINI_API_KEY || 
+      import.meta.env.VITE_GEMINI_API_KEY || 
+      (window as any).GEMINI_API_KEY ||
+      ""
+    ).trim();
     
-    if (apiKey && apiKey.length > 10) {
-      try {
-        const ai = new GoogleGenAI({ apiKey });
-        
-        const onlineResult = await fetchWithRetry(async () => {
-          const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview', 
-            contents: {
-              parts: [
-                { text: `Identifique a praga urbana nesta imagem. 
-                Sua resposta deve ser extremamente detalhada e técnica para um profissional de controle de pragas.
-                
-                REQUISITOS OBRIGATÓRIOS:
-                1. Use a ferramenta Google Search para encontrar dados ATUALIZADOS sobre a praga.
-                2. MÉTODOS DE CONTROLE QUÍMICO: Liste princípios ativos recomendados, DOSAGENS EXATAS (ex: ml/L ou g/10L) e MÉTODOS DE APLICAÇÃO (ex: pulverização, atomização, iscagem).
-                3. BIOLOGIA: Descreva ciclo de vida, hábitos alimentares e locais de refúgio.
-                4. RISCOS: Mencione doenças transmitidas ou danos estruturais.
-                
-                Retorne um JSON estrito seguindo o esquema fornecido.` },
-                { inlineData: { mimeType: "image/jpeg", data: base64 } }
-              ]
-            },
-            config: { 
-              responseMimeType: "application/json", 
-              responseSchema: PEST_SCHEMA as any,
-              temperature: 0.1,
-              tools: [{ googleSearch: {} }]
-            }
-          });
+    if (!apiKey || apiKey.length < 10) {
+      return { 
+        pestFound: false, 
+        confidence: 0, 
+        message: "Erro: Chave API Gemini não configurada. Configure a chave para usar o modo online." 
+      };
+    }
 
-          const text = response.text;
-          if (!text) throw new Error("IA retornou resposta vazia.");
-          
-          const parsed = JSON.parse(text);
-          if (parsed.pest) {
-            parsed.pest.source = "IA Online (Google Search)";
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const onlineResult = await fetchWithRetry(async () => {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview', 
+          contents: {
+            parts: [
+              { text: `Identifique a praga urbana nesta imagem. 
+              Sua resposta deve ser extremamente detalhada e técnica para um profissional de controle de pragas.
+              
+              REQUISITOS OBRIGATÓRIOS:
+              1. Use a ferramenta Google Search para encontrar dados ATUALIZADOS sobre a praga.
+              2. MÉTODOS DE CONTROLE QUÍMICO: Liste princípios ativos recomendados, DOSAGENS EXATAS (ex: ml/L ou g/10L) e MÉTODOS DE APLICAÇÃO (ex: pulverização, atomização, iscagem).
+              3. BIOLOGIA: Descreva ciclo de vida, hábitos alimentares e locais de refúgio.
+              4. RISCOS: Mencione doenças transmitidas ou danos estruturais.
+              
+              Retorne um JSON estrito seguindo o esquema fornecido.` },
+              { inlineData: { mimeType: "image/jpeg", data: base64 } }
+            ]
+          },
+          config: { 
+            responseMimeType: "application/json", 
+            responseSchema: PEST_SCHEMA as any,
+            temperature: 0.1,
+            tools: [{ googleSearch: {} }]
           }
-          return parsed;
-        }, 3);
+        });
+
+        const text = response.text;
+        if (!text) throw new Error("IA retornou resposta vazia.");
         
-        return onlineResult;
-      } catch (err: any) {
-        console.error("ERRO IA ONLINE:", err);
-        // Se estiver online mas a IA falhar (ex: erro de chave ou limite), 
-        // NÃO vamos cair no offline silenciosamente para não confundir o usuário.
-        // Vamos retornar o erro para que ele saiba que a busca online falhou.
-        return { 
-          pestFound: false, 
-          confidence: 0, 
-          message: `Erro na Busca Online: ${err.message || "Verifique sua chave API ou conexão"}.` 
-        };
-      }
-    } else {
-      console.warn("Chave API Gemini não encontrada.");
+        const parsed = JSON.parse(text);
+        if (parsed.pest) {
+          parsed.pest.source = "IA Online (Google Search)";
+        }
+        return parsed;
+      });
+      
+      return onlineResult;
+    } catch (err: any) {
+      console.error("❌ FALHA NO MODO ONLINE:", err);
+      // NÃO CAI NO OFFLINE. Retorna o erro para o usuário.
+      return { 
+        pestFound: false, 
+        confidence: 0, 
+        message: `Erro na Busca Online: ${err.message || "Falha na comunicação com a IA"}.` 
+      };
     }
   }
 
-  // Se chegou aqui, ou está offline ou não tem chave API. Usa o motor local.
+  // 2. MODO OFFLINE: Se não houver internet, usamos o motor local
+  console.log("🔌 MODO OFFLINE ATIVO: Iniciando TFLite Local...");
   if (elementToUse) {
-    console.log("🔌 Usando Motor Local (Offline/TFLite)...");
-    return await analyzeOffline(elementToUse);
-  }
-
-  // Fallback ou Modo Offline
-  if (elementToUse) {
-    console.log("ℹ️ Usando motor de IA local (Offline)...");
     return await analyzeOffline(elementToUse);
   }
   
   return { 
     pestFound: false, 
     confidence: 0, 
-    message: "Não foi possível analisar a imagem. Verifique sua conexão ou configure a chave API." 
+    message: "Não foi possível analisar a imagem. Verifique sua conexão." 
   };
 };
 
