@@ -294,7 +294,6 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
 
   // Prioridade Online: Se houver internet, tentamos SEMPRE o Gemini primeiro
   if (navigator.onLine) {
-    // Tenta obter a chave de múltiplas fontes (Vite, Process, ou Injeção Direta)
     const apiKey = (
       import.meta.env.VITE_GEMINI_API_KEY || 
       process.env.GEMINI_API_KEY || 
@@ -302,28 +301,23 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
       ""
     ).trim();
     
-    console.log("DEBUG IA: Verificando disponibilidade de chave online...");
-    console.log("DEBUG IA: Chave detectada?", apiKey ? `Sim (${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)})` : "Não");
-
     if (apiKey && apiKey.length > 10) {
       try {
-        console.log("DEBUG IA: Iniciando análise ONLINE com Gemini 3 Flash...");
         const ai = new GoogleGenAI({ apiKey });
         
-        return await fetchWithRetry(async () => {
+        const onlineResult = await fetchWithRetry(async () => {
           const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview', // Modelo mais estável e rápido para uso geral
+            model: 'gemini-3-flash-preview', 
             contents: {
               parts: [
-                { text: "Identifique a praga urbana nesta imagem. Use obrigatoriamente a ferramenta Google Search para buscar informações biológicas ATUALIZADAS, hábitos, reprodução e métodos de controle detalhados (físicos e químicos com dosagens por 10L). Retorne um JSON estrito seguindo o esquema fornecido." },
+                { text: "Identifique a praga urbana nesta imagem. Retorne um JSON estrito seguindo o esquema fornecido." },
                 { inlineData: { mimeType: "image/jpeg", data: base64 } }
               ]
             },
             config: { 
               responseMimeType: "application/json", 
               responseSchema: PEST_SCHEMA as any,
-              temperature: 0.1,
-              tools: [{ googleSearch: {} }]
+              temperature: 0.1
             }
           });
 
@@ -335,17 +329,25 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
           
           const parsed = JSON.parse(jsonMatch[0]);
           if (parsed.pest) {
-            parsed.pest.source = "IA Online (Gemini + Google Search)";
+            parsed.pest.source = "IA Online (Gemini)";
           }
-          console.log("✅ Sucesso Online:", parsed.pest?.name);
           return parsed;
-        }, 2); // 2 tentativas para evitar lentidão excessiva
+        }, 1); // Apenas 1 tentativa para falhar rápido e mostrar o erro
+        
+        return onlineResult;
       } catch (err: any) {
-        console.warn("⚠️ Falha na análise online (pode ser cota ou chave):", err.message);
-        // Se falhar o online, continua para o offline abaixo
+        console.error("ERRO CRÍTICO IA ONLINE:", err);
+        const errorMessage = err.message || "Erro desconhecido na IA Online";
+        
+        // Se falhar o online, tentamos o offline mas avisamos o erro
+        if (elementToUse) {
+          const offlineRes = await analyzeOffline(elementToUse);
+          return {
+            ...offlineRes,
+            message: `Falha Online: ${errorMessage.substring(0, 50)}. Usando motor local.`
+          };
+        }
       }
-    } else {
-      console.warn("⚠️ API Key não detectada. Certifique-se de configurá-la nas variáveis de ambiente.");
     }
   }
 
