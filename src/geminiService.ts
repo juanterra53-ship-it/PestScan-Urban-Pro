@@ -198,40 +198,78 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     const scores = await outputTensor.data();
     const scoresArray = Array.from(scores) as number[];
-    console.log("Scores Offline:", scoresArray);
     
-    let maxScoreIndex = -1;
-    let maxScore = 0;
+    console.log("--- DEBUG OFFLINE ---");
+    console.log("Output Shape:", outputTensor.shape);
+    console.log("Scores Length:", scoresArray.length);
+    
+    // Se o modelo tiver apenas 1 ou 2 saídas, é um modelo binário (ex: Barata vs Não Barata)
+    // Como o modelo carregado é 'modelo_barata.tflite', mapeamos 'Praga Detectada' para 'Barata-americana'
+    // para que o app puxe as informações detalhadas da enciclopédia.
+    const labelsToUse = scoresArray.length === MODEL_LABELS.length ? MODEL_LABELS : 
+                       scoresArray.length === 1 ? ["Barata-americana"] :
+                       scoresArray.length === 2 ? ["Barata-americana", "Nenhuma Praga"] :
+                       Array.from({length: scoresArray.length}, (_, i) => `Classe ${i}`);
 
-    if (scoresArray.length > 0) {
+    let maxScoreIndex = 0;
+    let maxScore = scoresArray[0] || 0;
+
+    if (scoresArray.length > 1) {
       maxScore = Math.max(...scoresArray);
       maxScoreIndex = scoresArray.indexOf(maxScore);
     }
 
-    // Limpeza
+    // Log dos Top 3 resultados para debug no console
+    const sortedIndices = [...scoresArray.keys()].sort((a, b) => scoresArray[b] - scoresArray[a]).slice(0, 3);
+    sortedIndices.forEach(idx => {
+      console.log(`${labelsToUse[idx] || `Classe ${idx}`}: ${(scoresArray[idx] * 100).toFixed(2)}%`);
+    });
+
+    // Limpeza de memória
     tensor.dispose();
     if (outputTensor && outputTensor.dispose) outputTensor.dispose();
     if (predictions && predictions !== outputTensor && predictions.dispose) predictions.dispose();
 
-    // Validação de confiança: se o score for muito baixo ou se todos forem iguais (erro de modelo)
-    const allSame = scoresArray.every(s => s === scoresArray[0]);
-    if (maxScoreIndex === -1 || maxScore < 0.40 || allSame) {
+    // Validação de confiança mais permissiva para modelos locais (30%)
+    // Removida a trava 'allSame' pois modelos binários ou de classe única sempre retornam true para isso
+    if (maxScoreIndex === -1 || maxScore < 0.30) {
       return {
         pestFound: false,
         confidence: maxScore,
-        message: "A IA local não conseguiu identificar com clareza. Tente uma foto melhor ou use a versão online."
+        message: "Confiança insuficiente na IA local. Tente aproximar mais a câmera."
       };
     }
 
-    const predictedLabel = MODEL_LABELS[maxScoreIndex] || "Praga Desconhecida";
-    if (predictedLabel === "Nenhuma Praga") {
-      return { pestFound: false, confidence: maxScore, message: "Nenhuma praga detectada pela IA local." };
+    let predictedLabel = labelsToUse[maxScoreIndex] || "Praga Detectada";
+    
+    // Se o modelo detectar "Nenhuma Praga", respeitamos
+    if (predictedLabel.toLowerCase().includes("nenhuma") || predictedLabel.toLowerCase().includes("none")) {
+       if (maxScore > 0.70) { // Só descarta se tiver muita certeza que não é nada
+         return { 
+           pestFound: false, 
+           confidence: maxScore, 
+           message: "Nenhuma praga detectada (IA Local)." 
+         };
+       } else {
+         // Se a certeza for baixa, pegamos a segunda melhor opção se existir
+         const secondBestIdx = sortedIndices[1];
+         if (secondBestIdx !== undefined && scoresArray[secondBestIdx] > 0.20) {
+            maxScoreIndex = secondBestIdx;
+            maxScore = scoresArray[secondBestIdx];
+            predictedLabel = labelsToUse[maxScoreIndex];
+         }
+       }
     }
 
+    // Tenta encontrar na enciclopédia local (Busca mais agressiva)
     const searchName = normalizeString(predictedLabel);
     const localPest = ENCYCLOPEDIA_DATA.find(p => {
       const pName = normalizeString(p.name);
-      return pName === searchName || pName.includes(searchName) || searchName.includes(pName);
+      const pSci = normalizeString(p.details.scientificName || "");
+      return pName === searchName || 
+             pName.includes(searchName) || 
+             searchName.includes(pName) ||
+             pSci.includes(searchName);
     });
 
     if (localPest) {
@@ -240,35 +278,35 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         confidence: maxScore,
         pest: { 
           ...localPest.details,
-          scientificName: `${localPest.details.scientificName} (Offline)`,
-          source: "Banco de Dados Local"
+          scientificName: `${localPest.details.scientificName} (IA Local)`,
+          source: "Identificação Offline"
         },
-        message: "Identificado offline via IA local."
+        message: "Identificado via motor local."
       };
     }
 
+    // Se não achou na enciclopédia, retorna um objeto genérico mas com o nome da praga
     return {
       pestFound: true,
       confidence: maxScore,
       pest: {
         name: predictedLabel,
-        scientificName: "Identificado Offline",
-        category: "PestScan Offline",
+        scientificName: "Análise Local",
+        category: "Praga Urbana",
         riskLevel: "Moderado",
-        characteristics: ["Detectado via IA local"],
-        anatomy: "Dados limitados no modo offline.",
+        characteristics: ["Detectado pelo modelo TFLite"],
+        anatomy: "Informações detalhadas requerem conexão online.",
         members: "N/A",
-        habits: "N/A",
+        habits: "Análise offline concluída.",
         reproduction: "N/A",
         larvalPhase: "N/A",
-        controlMethods: ["Consulte a enciclopédia online para detalhes."],
-        physicalMeasures: [],
-        chemicalMeasures: [],
-        healthRisks: "N/A"
+        controlMethods: ["Utilize métodos padrão de controle para esta espécie."],
+        physicalMeasures: ["Mantenha o local limpo", "Vede frestas e buracos"],
+        chemicalMeasures: ["Consulte um profissional para dosagens específicas"],
+        healthRisks: "Pode representar riscos à saúde."
       },
-      message: "Identificado offline. Conecte-se para ficha completa."
+      message: "Identificado via IA Local (Base Reduzida)."
     };
-
   } catch (error) {
     console.error("Erro na inferência offline:", error);
     return { pestFound: false, confidence: 0, message: "Erro no processamento offline." };
@@ -307,17 +345,27 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
         
         const onlineResult = await fetchWithRetry(async () => {
           const response = await ai.models.generateContent({
-            model: 'gemini-flash-latest', // Usando a versão estável do Flash
+            model: 'gemini-flash-latest', 
             contents: {
               parts: [
-                { text: "Identifique a praga urbana nesta imagem. Retorne um JSON estrito seguindo o esquema fornecido." },
+                { text: `Identifique a praga urbana nesta imagem. 
+                Sua resposta deve ser extremamente detalhada e técnica para um profissional de controle de pragas.
+                
+                REQUISITOS OBRIGATÓRIOS:
+                1. Use a ferramenta Google Search para encontrar dados ATUALIZADOS sobre a praga.
+                2. MÉTODOS DE CONTROLE QUÍMICO: Liste princípios ativos recomendados, DOSAGENS EXATAS (ex: ml/L ou g/10L) e MÉTODOS DE APLICAÇÃO (ex: pulverização, atomização, iscagem).
+                3. BIOLOGIA: Descreva ciclo de vida, hábitos alimentares e locais de refúgio.
+                4. RISCOS: Mencione doenças transmitidas ou danos estruturais.
+                
+                Retorne um JSON estrito seguindo o esquema fornecido.` },
                 { inlineData: { mimeType: "image/jpeg", data: base64 } }
               ]
             },
             config: { 
               responseMimeType: "application/json", 
               responseSchema: PEST_SCHEMA as any,
-              temperature: 0.1
+              temperature: 0.1,
+              tools: [{ googleSearch: {} }] // Re-ativando Google Search para dados de dosagem
             }
           });
 
