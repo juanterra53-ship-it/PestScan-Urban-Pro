@@ -307,7 +307,7 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
         
         const onlineResult = await fetchWithRetry(async () => {
           const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview', 
+            model: 'gemini-flash-latest', // Usando a versão estável do Flash
             contents: {
               parts: [
                 { text: "Identifique a praga urbana nesta imagem. Retorne um JSON estrito seguindo o esquema fornecido." },
@@ -332,7 +332,7 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
             parsed.pest.source = "IA Online (Gemini)";
           }
           return parsed;
-        }, 1); // Apenas 1 tentativa para falhar rápido e mostrar o erro
+        }, 3); // Aumentado para 3 tentativas para lidar com o erro 503 (Serviço Ocupado)
         
         return onlineResult;
       } catch (err: any) {
