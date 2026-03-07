@@ -13,7 +13,7 @@ import {
 import { registerSW } from 'virtual:pwa-register';
 import './index.css';
 import { supabase } from './supabaseClient';
-import { analyzePestImage, analyzePestByName, loadLocalModel, isLocalModelLoaded, getModelStatus } from './geminiService';
+import { analyzePestImage, analyzePestByName, loadLocalModel, isLocalModelLoaded, getModelStatus, analyzeOffline, generatePestAudio } from './geminiService';
 import { RecognitionResult, HistoryEntry, EncyclopediaItem, PestInfo } from './types';
 import { ENCYCLOPEDIA_DATA } from './data/encyclopedia';
 
@@ -735,33 +735,53 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col max-w-md mx-auto relative overflow-hidden pb-[env(safe-area-inset-bottom)]">
-      <header className="bg-emerald-900 p-6 pt-[calc(3rem+env(safe-area-inset-top))] pb-8 rounded-b-[3.5rem] text-white sticky top-0 z-40 shadow-xl">
+      <header className="bg-emerald-900 p-6 pt-[calc(3rem+env(safe-area-inset-top))] pb-10 rounded-b-[3.5rem] text-white sticky top-0 z-40 shadow-2xl border-b border-emerald-800/50">
         <div className="flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="bg-emerald-400/20 p-2 rounded-xl"><Bug className="text-emerald-400 w-6 h-6" /></div>
+          <div className="flex items-center gap-4">
+            <div className="bg-emerald-400/20 p-2.5 rounded-2xl backdrop-blur-sm border border-emerald-400/30">
+              <Bug className="text-emerald-400 w-7 h-7" />
+            </div>
             <div>
-              <h1 className="font-black text-lg text-white">PestScan Pro</h1>
-              <div className="flex flex-col gap-0.5">
-                <div className="flex items-center gap-1.5">
-                  <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-                  <span className="text-[9px] text-emerald-400 font-black uppercase tracking-widest">
-                    {isOnline ? 'CONECTADO' : 'MODO OFFLINE'}
+              <h1 className="font-black text-xl text-white tracking-tight">PestScan Pro</h1>
+              <div className="flex flex-col gap-1 mt-0.5">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse' : 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]'}`} />
+                  <span className={`text-[10px] font-black uppercase tracking-[0.15em] ${isOnline ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {isOnline ? 'IA ONLINE ATIVA' : 'MODO OFFLINE'}
                   </span>
                 </div>
-                <p className="text-[10px] text-white/60 font-medium truncate max-w-[120px]">
-                  {user?.name || 'VISITANTE'}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="text-[11px] text-white/70 font-bold uppercase tracking-wider truncate max-w-[140px]">
+                    {user?.name || 'VISITANTE'}
+                  </p>
+                  <div 
+                    onClick={() => { if (!isModelReady) loadLocalModel(); }}
+                    className={`w-1.5 h-1.5 rounded-full cursor-help ${isModelReady ? 'bg-emerald-400' : 'bg-slate-500'}`} 
+                    title={`IA Local: ${modelStatus}`}
+                  />
+                </div>
               </div>
-              <button 
-                onClick={() => { if (!isModelReady) loadLocalModel(); }}
-                className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-slate-500 cursor-pointer hover:bg-slate-400'}`} 
-                title={`IA Offline: ${modelStatus}`}
-              />
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {user && <button onClick={() => supabase.auth.signOut()} className="p-2 bg-white/10 rounded-xl"><LogOut size={20} /></button>}
-            {view !== 'main' && <button onClick={() => { setView('main'); stopCamera(); setError(null); }} className="p-2 bg-white/10 rounded-xl"><X size={20} /></button>}
+          <div className="flex items-center gap-3">
+            {user && (
+              <button 
+                onClick={() => supabase.auth.signOut()} 
+                className="p-2.5 bg-white/5 hover:bg-white/10 rounded-2xl transition-colors border border-white/10"
+                title="Sair"
+              >
+                <LogOut size={20} className="text-white/80" />
+              </button>
+            )}
+            {view !== 'main' && (
+              <button 
+                onClick={() => { setView('main'); stopCamera(); setError(null); }} 
+                className="p-2.5 bg-white/5 hover:bg-white/10 rounded-2xl transition-colors border border-white/10"
+                title="Voltar"
+              >
+                <X size={20} className="text-white/80" />
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -945,10 +965,14 @@ const App: React.FC = () => {
 
         {view === 'result' && currentResult && (
           <div className="space-y-6 pb-10 animate-in">
-            <div className="relative">
-              <img src={currentResult.capturedImage} className="w-full aspect-square object-cover rounded-[3.5rem] border-4 border-white shadow-2xl" />
-              <div className="absolute top-4 right-4 bg-emerald-900/90 backdrop-blur-md px-3 py-1 rounded-xl text-white text-[10px] font-black">{(currentResult.confidence * 100).toFixed(0)}% MATCH</div>
-            </div>
+              <div className="relative">
+                <img 
+                  id="result-image"
+                  src={currentResult.capturedImage} 
+                  className="w-full aspect-square object-cover rounded-[3.5rem] border-4 border-white shadow-2xl" 
+                />
+                <div className="absolute top-4 right-4 bg-emerald-900/90 backdrop-blur-md px-3 py-1 rounded-xl text-white text-[10px] font-black">{(currentResult.confidence * 100).toFixed(0)}% MATCH</div>
+              </div>
             {currentResult.pestFound && currentResult.pest ? (
               <PestBioCard pest={currentResult.pest} />
             ) : (
@@ -960,12 +984,46 @@ const App: React.FC = () => {
                   <p className="font-black text-slate-800 text-sm uppercase">Praga não identificada</p>
                   <p className="text-xs text-slate-400 font-bold mt-1">A imagem pode estar desfocada ou a praga não está no nosso banco de dados global.</p>
                   
-                  <div className="mt-4 p-3 bg-slate-50 rounded-xl text-[10px] font-mono text-slate-400 text-left space-y-1">
-                    <p>• IA Online: {navigator.onLine ? 'Conectado' : 'Desconectado'}</p>
-                    <p>• Chave API: {(import.meta.env.VITE_GEMINI_API_KEY || (window as any).GEMINI_API_KEY) ? 'Detectada' : 'Não Detectada'}</p>
-                    <p>• Confiança Local: {(currentResult.confidence * 100).toFixed(1)}%</p>
-                    <p>• Mensagem: {currentResult.message}</p>
-                  </div>
+                  {currentResult?.message && (
+                    <div className="mt-6 p-5 bg-red-50 border border-red-100 rounded-3xl text-left">
+                      <div className="flex items-start gap-3">
+                        <ShieldAlert className="text-red-500 w-5 h-5 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-red-800 font-bold text-[10px] uppercase tracking-wider mb-1">Diagnóstico do Sistema</p>
+                          <p className="text-red-700 text-[10px] leading-relaxed font-medium">
+                            {currentResult.message.includes("429") || currentResult.message.includes("quota") 
+                              ? "Limite de uso da IA atingido. Por favor, aguarde alguns minutos antes de tentar novamente ou use a identificação local abaixo."
+                              : currentResult.message}
+                          </p>
+                          
+                          {/* Botão de Fallback Manual */}
+                          {isOnline && isModelReady && (
+                            <button
+                              onClick={async () => {
+                                const img = document.getElementById('result-image') as HTMLImageElement;
+                                if (img) {
+                                  setLoading(true);
+                                  try {
+                                    const result = await analyzeOffline(img);
+                                    // Mantém a imagem capturada original
+                                    setCurrentResult({ ...result, capturedImage: currentResult.capturedImage });
+                                  } catch (e) {
+                                    console.error("Erro na identificação local:", e);
+                                  } finally {
+                                    setLoading(false);
+                                  }
+                                }
+                              }}
+                              className="mt-4 w-full py-3 bg-white border border-red-200 text-red-700 rounded-2xl text-[9px] font-black uppercase tracking-widest hover:bg-red-50 transition-colors flex items-center justify-center gap-2 shadow-sm active:scale-95"
+                            >
+                              <Search size={14} />
+                              Tentar Identificação Local (Offline)
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <button 
                   onClick={() => setView('camera')} 
