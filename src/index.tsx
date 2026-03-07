@@ -742,9 +742,9 @@ const App: React.FC = () => {
             <div>
               <h1 className="font-black text-lg text-white">PestScan Pro</h1>
               <div className="flex items-center gap-2">
-                <p className="text-[10px] text-emerald-400/60 font-bold uppercase flex items-center gap-1">
-                  {!isOnline ? <ZapOff size={10} /> : <Zap size={10} />}
-                  {!isOnline ? 'MODO OFFLINE' : user?.name}
+                <p className="text-[10px] text-emerald-400/80 font-black uppercase tracking-widest flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                  {isOnline ? 'CONECTADO' : 'MODO OFFLINE'} • {user?.name || 'VISITANTE'}
                 </p>
                 <button 
                   onClick={() => { if (!isModelReady) loadLocalModel(); }}
@@ -863,6 +863,14 @@ const App: React.FC = () => {
 
         {view === 'camera' && (
           <div className="flex flex-col items-center animate-in">
+             {/* Indicador de Status da IA Local */}
+             <div className="mb-4 flex items-center gap-2 px-4 py-2 bg-white/50 backdrop-blur-sm rounded-2xl border border-slate-100 shadow-sm">
+                <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                  IA Local: {modelStatus}
+                </span>
+             </div>
+
              <div 
                 className="w-full aspect-[4/5] bg-slate-900 rounded-[3.5rem] overflow-hidden border-8 border-white shadow-2xl relative touch-none"
                 onTouchStart={handleTouchStart}
