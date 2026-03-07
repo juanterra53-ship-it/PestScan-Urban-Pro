@@ -262,8 +262,6 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     // Tenta encontrar na enciclopédia local (Busca mais agressiva)
     const searchName = normalizeString(predictedLabel);
     
-    // Se o modelo for o de baratas e detectou algo, e estamos offline, 
-    // podemos sugerir a Barata-americana se não houver match exato
     let localPest = ENCYCLOPEDIA_DATA.find(p => {
       const pName = normalizeString(p.name);
       const pSci = normalizeString(p.details.scientificName || "");
@@ -272,11 +270,6 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
              searchName.includes(pName) ||
              pSci.includes(searchName);
     });
-
-    // Fallback específico para o modelo de baratas se detectou "Praga Detectada"
-    if (!localPest && (predictedLabel === "Praga Detectada" || predictedLabel === "Barata")) {
-      localPest = ENCYCLOPEDIA_DATA.find(p => p.name === "Barata-americana");
-    }
 
     if (localPest) {
       return {
@@ -337,16 +330,9 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   }
 
   // Prioridade Online: Se houver internet, tentamos SEMPRE o Gemini primeiro
-  // IMPORTANTE: navigator.onLine pode ser impreciso em alguns navegadores mobile, 
-  // mas é a melhor forma de detectar sem fazer um ping real.
   if (navigator.onLine) {
-    console.log("📡 Iniciando Busca Online (Gemini + Google Search)...");
-    const apiKey = (
-      import.meta.env.VITE_GEMINI_API_KEY || 
-      process.env.GEMINI_API_KEY || 
-      (window as any).GEMINI_API_KEY ||
-      ""
-    ).trim();
+    console.log("📡 Iniciando Busca Online (Gemini 3 + Google Search)...");
+    const apiKey = (process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || "").trim();
     
     if (apiKey && apiKey.length > 10) {
       try {
@@ -354,7 +340,7 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
         
         const onlineResult = await fetchWithRetry(async () => {
           const response = await ai.models.generateContent({
-            model: 'gemini-flash-latest', 
+            model: 'gemini-3-flash-preview', 
             contents: {
               parts: [
                 { text: `Identifique a praga urbana nesta imagem. 
@@ -374,38 +360,41 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
               responseMimeType: "application/json", 
               responseSchema: PEST_SCHEMA as any,
               temperature: 0.1,
-              tools: [{ googleSearch: {} }] // Re-ativando Google Search para dados de dosagem
+              tools: [{ googleSearch: {} }]
             }
           });
 
           const text = response.text;
-          if (!text) throw new Error("Sem resposta da IA.");
+          if (!text) throw new Error("IA retornou resposta vazia.");
           
-          const jsonMatch = text.match(/\{[\s\S]*\}/);
-          if (!jsonMatch) throw new Error("Formato JSON inválido.");
-          
-          const parsed = JSON.parse(jsonMatch[0]);
+          const parsed = JSON.parse(text);
           if (parsed.pest) {
-            parsed.pest.source = "IA Online (Gemini)";
+            parsed.pest.source = "IA Online (Google Search)";
           }
           return parsed;
-        }, 3); // Aumentado para 3 tentativas para lidar com o erro 503 (Serviço Ocupado)
+        }, 3);
         
         return onlineResult;
       } catch (err: any) {
-        console.error("ERRO CRÍTICO IA ONLINE:", err);
-        const errorMessage = err.message || "Erro desconhecido na IA Online";
-        
-        // Se falhar o online, tentamos o offline mas avisamos o erro
-        if (elementToUse) {
-          const offlineRes = await analyzeOffline(elementToUse);
-          return {
-            ...offlineRes,
-            message: `Falha Online: ${errorMessage.substring(0, 50)}. Usando motor local.`
-          };
-        }
+        console.error("ERRO IA ONLINE:", err);
+        // Se estiver online mas a IA falhar (ex: erro de chave ou limite), 
+        // NÃO vamos cair no offline silenciosamente para não confundir o usuário.
+        // Vamos retornar o erro para que ele saiba que a busca online falhou.
+        return { 
+          pestFound: false, 
+          confidence: 0, 
+          message: `Erro na Busca Online: ${err.message || "Verifique sua chave API ou conexão"}.` 
+        };
       }
+    } else {
+      console.warn("Chave API Gemini não encontrada.");
     }
+  }
+
+  // Se chegou aqui, ou está offline ou não tem chave API. Usa o motor local.
+  if (elementToUse) {
+    console.log("🔌 Usando Motor Local (Offline/TFLite)...");
+    return await analyzeOffline(elementToUse);
   }
 
   // Fallback ou Modo Offline
