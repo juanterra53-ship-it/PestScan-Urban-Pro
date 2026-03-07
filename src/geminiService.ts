@@ -88,9 +88,9 @@ export const isLocalModelLoaded = () => !!localModel;
 // Labels correspondentes ao seu modelo treinado. 
 // IMPORTANTE: Ajuste esta lista para que os nomes sejam EXATAMENTE iguais aos da ENCYCLOPEDIA_DATA no index.tsx
 // Labels correspondentes ao seu modelo treinado. 
-// IMPORTANTE: O modelo 'modelo_barata.tflite' parece ser focado em baratas ou ter uma ordem específica.
-// Se o modelo sempre retorna o primeiro índice, precisamos de uma validação mais rigorosa.
-const MODEL_LABELS = [
+// Quando você tiver o modelo universal para todas as pragas, 
+// basta atualizar esta lista na mesma ordem em que as classes foram treinadas.
+export const MODEL_LABELS = [
   "Barata-alemã",
   "Barata-americana",
   "Aranha-marrom",
@@ -388,11 +388,17 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
       return onlineResult;
     } catch (err: any) {
       console.error("❌ FALHA NO MODO ONLINE:", err);
-      // NÃO CAI NO OFFLINE. Retorna o erro para o usuário.
+      let errorMsg = err.message || "Falha na comunicação com a IA";
+      
+      // Tratamento amigável para erro de cota (429)
+      if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.toLowerCase().includes("exhausted")) {
+        errorMsg = "Limite de uso (Quota) atingido no Google Gemini. Aguarde 1 minuto para reset do limite por minuto, ou tente amanhã se atingiu o limite diário. Use a Identificação Local abaixo.";
+      }
+
       return { 
         pestFound: false, 
         confidence: 0, 
-        message: `Erro na Busca Online: ${err.message || "Falha na comunicação com a IA"}.` 
+        message: errorMsg 
       };
     }
   }
@@ -440,6 +446,16 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
       parsed.pest.source = "Pesquisa Google";
     }
     return parsed;
+  }).catch(err => {
+    let errorMsg = err.message || "Erro na pesquisa";
+    if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
+      errorMsg = "Limite de pesquisa atingido. Tente novamente em 1 minuto.";
+    }
+    return {
+      pestFound: false,
+      confidence: 0,
+      message: errorMsg
+    };
   });
 };
 
