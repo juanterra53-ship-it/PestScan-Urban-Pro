@@ -215,7 +215,7 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     // Validação de confiança: se o score for muito baixo ou se todos forem iguais (erro de modelo)
     const allSame = scoresArray.every(s => s === scoresArray[0]);
-    if (maxScoreIndex === -1 || maxScore < 0.60 || allSame) {
+    if (maxScoreIndex === -1 || maxScore < 0.40 || allSame) {
       return {
         pestFound: false,
         confidence: maxScore,
@@ -303,6 +303,7 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
     ).trim();
     
     console.log("DEBUG IA: Verificando disponibilidade de chave online...");
+    console.log("DEBUG IA: Chave detectada?", apiKey ? `Sim (${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)})` : "Não");
 
     if (apiKey && apiKey.length > 10) {
       try {
