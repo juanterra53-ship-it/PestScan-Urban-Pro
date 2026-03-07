@@ -204,11 +204,9 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     console.log("Scores Length:", scoresArray.length);
     
     // Se o modelo tiver apenas 1 ou 2 saídas, é um modelo binário (ex: Barata vs Não Barata)
-    // Como o modelo carregado é 'modelo_barata.tflite', mapeamos 'Praga Detectada' para 'Barata-americana'
-    // para que o app puxe as informações detalhadas da enciclopédia.
     const labelsToUse = scoresArray.length === MODEL_LABELS.length ? MODEL_LABELS : 
-                       scoresArray.length === 1 ? ["Barata-americana"] :
-                       scoresArray.length === 2 ? ["Barata-americana", "Nenhuma Praga"] :
+                       scoresArray.length === 1 ? ["Praga Detectada"] :
+                       scoresArray.length === 2 ? ["Praga Detectada", "Nenhuma Praga"] :
                        Array.from({length: scoresArray.length}, (_, i) => `Classe ${i}`);
 
     let maxScoreIndex = 0;
@@ -263,7 +261,10 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     // Tenta encontrar na enciclopédia local (Busca mais agressiva)
     const searchName = normalizeString(predictedLabel);
-    const localPest = ENCYCLOPEDIA_DATA.find(p => {
+    
+    // Se o modelo for o de baratas e detectou algo, e estamos offline, 
+    // podemos sugerir a Barata-americana se não houver match exato
+    let localPest = ENCYCLOPEDIA_DATA.find(p => {
       const pName = normalizeString(p.name);
       const pSci = normalizeString(p.details.scientificName || "");
       return pName === searchName || 
@@ -271,6 +272,11 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
              searchName.includes(pName) ||
              pSci.includes(searchName);
     });
+
+    // Fallback específico para o modelo de baratas se detectou "Praga Detectada"
+    if (!localPest && (predictedLabel === "Praga Detectada" || predictedLabel === "Barata")) {
+      localPest = ENCYCLOPEDIA_DATA.find(p => p.name === "Barata-americana");
+    }
 
     if (localPest) {
       return {
@@ -331,7 +337,10 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
   }
 
   // Prioridade Online: Se houver internet, tentamos SEMPRE o Gemini primeiro
+  // IMPORTANTE: navigator.onLine pode ser impreciso em alguns navegadores mobile, 
+  // mas é a melhor forma de detectar sem fazer um ping real.
   if (navigator.onLine) {
+    console.log("📡 Iniciando Busca Online (Gemini + Google Search)...");
     const apiKey = (
       import.meta.env.VITE_GEMINI_API_KEY || 
       process.env.GEMINI_API_KEY || 
