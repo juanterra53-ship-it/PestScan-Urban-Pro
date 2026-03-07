@@ -741,17 +741,22 @@ const App: React.FC = () => {
             <div className="bg-emerald-400/20 p-2 rounded-xl"><Bug className="text-emerald-400 w-6 h-6" /></div>
             <div>
               <h1 className="font-black text-lg text-white">PestScan Pro</h1>
-              <div className="flex items-center gap-2">
-                <p className="text-[10px] text-emerald-400/80 font-black uppercase tracking-widest flex items-center gap-1.5">
+              <div className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5">
                   <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-                  {isOnline ? 'CONECTADO' : 'MODO OFFLINE'} • {user?.name || 'VISITANTE'}
+                  <span className="text-[9px] text-emerald-400 font-black uppercase tracking-widest">
+                    {isOnline ? 'CONECTADO' : 'MODO OFFLINE'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-white/60 font-medium truncate max-w-[120px]">
+                  {user?.name || 'VISITANTE'}
                 </p>
-                <button 
-                  onClick={() => { if (!isModelReady) loadLocalModel(); }}
-                  className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-slate-500 cursor-pointer hover:bg-slate-400'}`} 
-                  title={`IA Offline: ${modelStatus}`}
-                />
               </div>
+              <button 
+                onClick={() => { if (!isModelReady) loadLocalModel(); }}
+                className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-slate-500 cursor-pointer hover:bg-slate-400'}`} 
+                title={`IA Offline: ${modelStatus}`}
+              />
             </div>
           </div>
           <div className="flex items-center gap-2">
