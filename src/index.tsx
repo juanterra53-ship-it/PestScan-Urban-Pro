@@ -992,7 +992,7 @@ const App: React.FC = () => {
                           <p className="text-red-800 font-bold text-[10px] uppercase tracking-wider mb-1">Diagnóstico do Sistema</p>
                           <p className="text-red-700 text-[10px] leading-relaxed font-medium">
                             {currentResult.message.includes("429") || currentResult.message.includes("quota") 
-                              ? "Limite de uso da IA atingido. Por favor, aguarde alguns minutos antes de tentar novamente ou use a identificação local abaixo."
+                              ? "Limite de uso atingido (Google Gemini). Aguarde 1 minuto para reset do limite por minuto. Se o erro persistir, a cota diária foi atingida e resetará amanhã cedo. Use a Identificação Local abaixo."
                               : currentResult.message}
                           </p>
                           
