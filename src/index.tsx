@@ -742,12 +742,13 @@ const App: React.FC = () => {
             <div>
               <h1 className="font-black text-lg text-white">PestScan Pro</h1>
               <div className="flex items-center gap-2">
-                <p className="text-[10px] text-emerald-400/60 font-bold uppercase">
-                  {!isOnline ? 'OFFLINE' : user?.name}
+                <p className="text-[10px] text-emerald-400/60 font-bold uppercase flex items-center gap-1">
+                  {!isOnline ? <ZapOff size={10} /> : <Zap size={10} />}
+                  {!isOnline ? 'MODO OFFLINE' : user?.name}
                 </p>
                 <button 
                   onClick={() => { if (!isModelReady) loadLocalModel(); }}
-                  className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500 cursor-pointer hover:bg-slate-400'}`} 
+                  className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-slate-500 cursor-pointer hover:bg-slate-400'}`} 
                   title={`IA Offline: ${modelStatus}`}
                 />
               </div>
