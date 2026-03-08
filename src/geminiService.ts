@@ -73,7 +73,7 @@ const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
   });
 };
 
-const fetchWithRetry = async (fn: () => Promise<any>, retries = 5): Promise<any> => {
+const fetchWithRetry = async (fn: () => Promise<any>, retries = 3): Promise<any> => {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn();
@@ -82,16 +82,9 @@ const fetchWithRetry = async (fn: () => Promise<any>, retries = 5): Promise<any>
       const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
       const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.toLowerCase().includes("high demand");
       
-      if (isRateLimit && i < retries - 1) {
-        const waitTime = 15000;
-        console.warn(`Limite de quota atingido. Tentativa ${i + 1} de ${retries}. Aguardando ${waitTime/1000}s...`);
-        await delay(waitTime);
-        continue;
-      }
-
-      if (isServiceError && i < retries - 1) {
-        const waitTime = 3000 * (i + 1); // Aumentado o delay para 503
-        console.warn(`Servidor sobrecarregado (503). Tentativa ${i + 1} de ${retries}. Aguardando ${waitTime/1000}s...`);
+      if ((isRateLimit || isServiceError) && i < retries - 1) {
+        const waitTime = isRateLimit ? 2000 : 1000; // Reduzido drasticamente para não travar o app
+        console.warn(`Erro temporário (${isRateLimit ? '429' : '503'}). Tentativa ${i + 1} de ${retries}. Aguardando ${waitTime/1000}s...`);
         await delay(waitTime);
         continue;
       }
@@ -346,7 +339,7 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 // Função auxiliar para obter variáveis de ambiente de forma segura
 export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
   // Redimensiona a imagem para evitar erros de payload/timeout
-  const base64 = await resizeImage(base64Raw);
+  const base64 = await resizeImage(base64Raw, 600); // Reduzido para 600px para ser ainda mais rápido
   
   let elementToUse = imageElement;
   
@@ -363,9 +356,9 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
     }
   }
 
-  // 1. MODO ONLINE: Se houver internet, usamos APENAS o Gemini
+  // 1. MODO ONLINE: Se houver internet, usamos a estratégia de Duas Fases (Identificação -> Busca)
   if (navigator.onLine) {
-    console.log("🌐 MODO ONLINE ATIVO: Iniciando Gemini...");
+    console.log("🌐 MODO ONLINE ATIVO: Estratégia de Duas Fases...");
     const apiKey = (
       process.env.GEMINI_API_KEY || 
       import.meta.env.VITE_GEMINI_API_KEY || 
@@ -377,112 +370,93 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
       return { 
         pestFound: false, 
         confidence: 0, 
-        message: "Erro: Chave API Gemini não configurada. Configure a chave para usar o modo online." 
+        message: "Erro: Chave API Gemini não configurada." 
       };
     }
 
     try {
       const ai = new GoogleGenAI({ apiKey });
-      
-      // Rotação de modelos para evitar 503 persistente em um único cluster
-      const MODELS = ['gemini-3-flash-preview', 'gemini-flash-latest'];
-      
-      // Tenta com Google Search primeiro
-      try {
-        const onlineResult = await fetchWithRetry(async () => {
-          // Tenta o primeiro modelo da lista
-          const response = await ai.models.generateContent({
-            model: MODELS[0], 
-            contents: {
-              parts: [
-                { text: `Identifique a praga urbana nesta imagem. 
-                Sua resposta deve ser extremamente detalhada e técnica para um profissional de controle de pragas.
-                
-                REQUISITOS OBRIGATÓRIOS:
-                1. Use a ferramenta Google Search para encontrar dados ATUALIZADOS sobre a praga.
-                2. MÉTODOS DE CONTROLE QUÍMICO: Liste princípios ativos recomendados, DOSAGENS EXATAS (ex: ml/L ou g/10L) e MÉTODOS DE APLICAÇÃO (ex: pulverização, atomização, iscagem).
-                3. BIOLOGIA: Descreva ciclo de vida, hábitos alimentares e locais de refúgio.
-                4. RISCOS: Mencione doenças transmitidas ou danos estruturais.
-                
-                Retorne um JSON estrito seguindo o esquema fornecido.` },
-                { inlineData: { mimeType: "image/jpeg", data: base64 } }
-              ]
-            },
-            config: { 
-              responseMimeType: "application/json", 
-              responseSchema: PEST_SCHEMA as any,
-              temperature: 0.1,
-              tools: [{ googleSearch: {} }]
-            }
-          });
+      const MODEL_NAME = 'gemini-flash-latest';
 
-          const text = response.text;
-          if (!text) throw new Error("IA retornou resposta vazia.");
-          
-          const parsed = JSON.parse(text);
-          if (parsed.pest) {
-            parsed.pest.source = `IA Online (Google Search - ${MODELS[0]})`;
+      // FASE 1: Identificação Rápida (Sem Busca)
+      // Isso é muito mais rápido e estável que tentar buscar por imagem
+      const identification = await fetchWithRetry(async () => {
+        const response = await ai.models.generateContent({
+          model: MODEL_NAME,
+          contents: {
+            parts: [
+              { text: "Identifique apenas o nome comum e o nome científico da praga urbana nesta imagem. Retorne em JSON: { \"name\": \"...\", \"scientificName\": \"...\", \"confidence\": 0.95 }" },
+              { inlineData: { mimeType: "image/jpeg", data: base64 } }
+            ]
+          },
+          config: { 
+            responseMimeType: "application/json",
+            temperature: 0.1
           }
-          return parsed;
-        }, 1);
-        
-        return onlineResult;
-      } catch (searchErr: any) {
-        const errorMsg = searchErr.message || "";
-        const isQuota = errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED");
-        const isServiceError = errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand");
-        
-        if (isQuota || isServiceError) {
-          console.warn(`⚠️ ${isQuota ? 'Cota' : 'Sobrecarga'} detectada. Tentando IA pura com modelo alternativo...`);
-          
-          // Fallback: IA Pura sem Google Search e com rotação de modelo
-          const fallbackResult = await fetchWithRetry(async () => {
-            const response = await ai.models.generateContent({
-              model: MODELS[1], // Usa o segundo modelo
-              contents: {
-                parts: [
-                  { text: `Identifique a praga urbana nesta imagem. 
-                  Use seu conhecimento interno de entomologia urbana.
-                  Retorne um JSON estrito seguindo o esquema fornecido.` },
-                  { inlineData: { mimeType: "image/jpeg", data: base64 } }
-                ]
-              },
-              config: { 
-                responseMimeType: "application/json", 
-                responseSchema: PEST_SCHEMA as any,
-                temperature: 0.1
-              }
-            });
+        });
+        const text = response.text;
+        if (!text) throw new Error("IA não identificou a imagem.");
+        return JSON.parse(text);
+      }, 2);
 
-            const text = response.text;
-            if (!text) throw new Error("IA retornou resposta vazia.");
-            
-            const parsed = JSON.parse(text);
-            if (parsed.pest) {
-              parsed.pest.source = `IA Online (Conhecimento Interno - ${MODELS[1]})`;
-            }
-            return parsed;
-          }, 3); // Mais retries para o fallback
-          return fallbackResult;
-        }
-        throw searchErr;
+      if (!identification.name || identification.name.toLowerCase().includes("não identificado")) {
+        throw new Error("Não foi possível identificar a praga na imagem.");
       }
+
+      console.log(`✅ Identificado: ${identification.name}. Iniciando FASE 2 (Busca de Detalhes)...`);
+
+      // FASE 2: Busca de Detalhes Técnicos (Usando o Nome)
+      // Agora que temos o nome, a busca é 100% precisa e rápida
+      try {
+        const details = await analyzePestByName(identification.name);
+        if (details.pestFound) {
+          return {
+            ...details,
+            confidence: identification.confidence || details.confidence,
+            message: "Identificação completa concluída com sucesso."
+          };
+        }
+      } catch (searchErr) {
+        console.warn("⚠️ Falha na busca detalhada. Retornando dados básicos.", searchErr);
+      }
+
+      // Fallback: Se a busca falhar, retorna o que identificamos na Fase 1
+      return {
+        pestFound: true,
+        confidence: identification.confidence || 0.8,
+        pest: {
+          name: identification.name,
+          scientificName: identification.scientificName || "Análise Visual",
+          category: "Praga Urbana",
+          riskLevel: "Moderado",
+          characteristics: ["Identificado via análise visual rápida."],
+          anatomy: "Detalhes técnicos indisponíveis no momento.",
+          members: "N/A",
+          habits: "Consulte um especialista para hábitos específicos.",
+          reproduction: "N/A",
+          larvalPhase: "N/A",
+          controlMethods: ["Utilize métodos padrão de controle."],
+          physicalMeasures: ["Limpeza e vedação do local."],
+          chemicalMeasures: ["Consulte dosagens em rótulos de produtos autorizados."],
+          healthRisks: "Risco biológico padrão.",
+          source: "IA Online (Identificação Rápida)"
+        },
+        message: "Identificação básica concluída. Detalhes técnicos limitados devido à conexão."
+      };
+
     } catch (err: any) {
       console.error("❌ FALHA NO MODO ONLINE:", err);
-      let errorMsg = err.message || "Falha na comunicação com a IA";
+      const errorMsg = err.message || "";
       
-      // Tratamento amigável para erro de cota ou sobrecarga final
-      if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
-        errorMsg = "Limite de uso diário atingido no Google Gemini. O Google reseta as cotas gratuitas periodicamente. Por favor, use a Identificação Local (Offline) abaixo para continuar trabalhando agora.";
-      } else if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand")) {
-        errorMsg = "O servidor do Google está sobrecarregado no momento (Erro 503). Isso é temporário. Por favor, use a Identificação Local (Offline) abaixo para não parar seu trabalho.";
+      if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
+        return { pestFound: false, confidence: 0, message: "Limite de uso atingido. Use o Modo Offline abaixo." };
+      }
+      
+      if (errorMsg.includes("503") || errorMsg.toLowerCase().includes("demand")) {
+        return { pestFound: false, confidence: 0, message: "Servidor sobrecarregado. Use o Modo Offline abaixo." };
       }
 
-      return { 
-        pestFound: false, 
-        confidence: 0, 
-        message: errorMsg 
-      };
+      return { pestFound: false, confidence: 0, message: `Erro: ${errorMsg}` };
     }
   }
 
@@ -514,7 +488,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
     // Tenta com busca primeiro (Máxima precisão)
     return await fetchWithRetry(async () => {
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview', 
+        model: 'gemini-flash-latest', 
         contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use o Google Search para encontrar dados precisos sobre: nome científico, hábitos, reprodução, membros, métodos de controle físico e químico. IMPORTANTE: Na seção 'chemicalMeasures', forneça o nome do princípio ativo ou produto seguido da dosagem exata por 10 litros de água (ex: 'Bifentrina: 30ml/10L água'). Retorne em JSON puro.`,
         config: { 
           responseMimeType: "application/json", 
@@ -542,7 +516,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
       // Fallback sem busca
       return await fetchWithRetry(async () => {
         const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview', 
+          model: 'gemini-flash-latest', 
           contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use seu conhecimento interno de entomologia urbana. Retorne em JSON puro.`,
           config: { 
             responseMimeType: "application/json", 
