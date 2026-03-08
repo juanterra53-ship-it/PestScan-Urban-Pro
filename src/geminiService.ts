@@ -51,25 +51,47 @@ const PEST_SCHEMA = {
 // Função auxiliar para aguardar tempo determinado (Exponential Backoff)
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-const fetchWithRetry = async (fn: () => Promise<any>, retries = 3): Promise<any> => {
+// Função auxiliar para redimensionar imagem (evita 503 por payload grande)
+const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let width = img.width;
+      let height = img.height;
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
+    };
+    img.src = `data:image/jpeg;base64,${base64}`;
+  });
+};
+
+const fetchWithRetry = async (fn: () => Promise<any>, retries = 5): Promise<any> => {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn();
     } catch (error: any) {
       const msg = error.message || "";
       const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
-      const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE");
+      const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.toLowerCase().includes("high demand");
       
       if (isRateLimit && i < retries - 1) {
-        // Para 429, esperamos um pouco mais
-        const waitTime = 15000; // 15 segundos é o padrão para o free tier do Gemini
+        const waitTime = 15000;
         console.warn(`Limite de quota atingido. Tentativa ${i + 1} de ${retries}. Aguardando ${waitTime/1000}s...`);
         await delay(waitTime);
         continue;
       }
 
       if (isServiceError && i < retries - 1) {
-        const waitTime = 2000 * (i + 1);
+        const waitTime = 3000 * (i + 1); // Aumentado o delay para 503
+        console.warn(`Servidor sobrecarregado (503). Tentativa ${i + 1} de ${retries}. Aguardando ${waitTime/1000}s...`);
         await delay(waitTime);
         continue;
       }
@@ -322,7 +344,10 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 };
 
 // Função auxiliar para obter variáveis de ambiente de forma segura
-export const analyzePestImage = async (base64: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
+export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
+  // Redimensiona a imagem para evitar erros de payload/timeout
+  const base64 = await resizeImage(base64Raw);
+  
   let elementToUse = imageElement;
   
   if (!elementToUse) {
@@ -359,14 +384,15 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      // Usamos gemini-flash-latest para maior estabilidade em momentos de pico
-      const MODEL_NAME = 'gemini-flash-latest';
+      // Rotação de modelos para evitar 503 persistente em um único cluster
+      const MODELS = ['gemini-3-flash-preview', 'gemini-flash-latest'];
       
-      // Tenta com Google Search primeiro (Máxima precisão)
+      // Tenta com Google Search primeiro
       try {
         const onlineResult = await fetchWithRetry(async () => {
+          // Tenta o primeiro modelo da lista
           const response = await ai.models.generateContent({
-            model: MODEL_NAME, 
+            model: MODELS[0], 
             contents: {
               parts: [
                 { text: `Identifique a praga urbana nesta imagem. 
@@ -395,10 +421,10 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
           
           const parsed = JSON.parse(text);
           if (parsed.pest) {
-            parsed.pest.source = "IA Online (Google Search)";
+            parsed.pest.source = `IA Online (Google Search - ${MODELS[0]})`;
           }
           return parsed;
-        }, 1); // Apenas 1 tentativa com busca para não travar o usuário
+        }, 1);
         
         return onlineResult;
       } catch (searchErr: any) {
@@ -407,11 +433,12 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
         const isServiceError = errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand");
         
         if (isQuota || isServiceError) {
-          console.warn(`⚠️ ${isQuota ? 'Cota' : 'Sobrecarga'} detectada. Tentando IA pura sem Google Search...`);
-          // Fallback: IA Pura sem Google Search (Cota muito maior e menos chance de 503)
+          console.warn(`⚠️ ${isQuota ? 'Cota' : 'Sobrecarga'} detectada. Tentando IA pura com modelo alternativo...`);
+          
+          // Fallback: IA Pura sem Google Search e com rotação de modelo
           const fallbackResult = await fetchWithRetry(async () => {
             const response = await ai.models.generateContent({
-              model: MODEL_NAME, 
+              model: MODELS[1], // Usa o segundo modelo
               contents: {
                 parts: [
                   { text: `Identifique a praga urbana nesta imagem. 
@@ -432,10 +459,10 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
             
             const parsed = JSON.parse(text);
             if (parsed.pest) {
-              parsed.pest.source = "IA Online (Conhecimento Interno)";
+              parsed.pest.source = `IA Online (Conhecimento Interno - ${MODELS[1]})`;
             }
             return parsed;
-          }, 2);
+          }, 3); // Mais retries para o fallback
           return fallbackResult;
         }
         throw searchErr;
@@ -508,9 +535,10 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
   } catch (err: any) {
     const errorMsg = err.message || "";
     const isQuota = errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED");
+    const isServiceError = errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand");
     
-    if (isQuota) {
-      console.warn("⚠️ Cota de Busca atingida na pesquisa por nome. Tentando IA pura...");
+    if (isQuota || isServiceError) {
+      console.warn(`⚠️ ${isQuota ? 'Cota' : 'Sobrecarga'} atingida na pesquisa por nome. Tentando IA pura...`);
       // Fallback sem busca
       return await fetchWithRetry(async () => {
         const response = await ai.models.generateContent({
