@@ -91,17 +91,26 @@ export const isLocalModelLoaded = () => !!localModel;
 // Quando você tiver o modelo universal para todas as pragas, 
 // basta atualizar esta lista na mesma ordem em que as classes foram treinadas.
 export const MODEL_LABELS = [
-  "Barata-alemã",
-  "Barata-americana",
+  "Aranha-armadeira",
   "Aranha-marrom",
-  "Escorpião-amarelo",
+  "Barata-americana",
+  "Barata-alemã",
+  "Barata-oriental",
+  "Cupim-de-madeira-seca",
   "Cupim-subterrâneo",
+  "Escorpião-amarelo",
+  "Escorpião-marrom",
+  "Formiga-carpinteira",
+  "Formiga-fantasma",
   "Formiga-lava-pés",
-  "Gorgulho-do-arroz",
   "Mosca-doméstica",
-  "Mosquito",
-  "Rato",
-  "Nenhuma Praga"
+  "Mosca-varejeira",
+  "Aedes aegypti",
+  "Culex quinquefasciatus",
+  "Percevejo-de-cama",
+  "Rato-de-telhado",
+  "Ratazana",
+  "Camundongo"
 ];
 
 export const loadLocalModel = async () => {
@@ -349,50 +358,91 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
 
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const onlineResult = await fetchWithRetry(async () => {
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview', 
-          contents: {
-            parts: [
-              { text: `Identifique a praga urbana nesta imagem. 
-              Sua resposta deve ser extremamente detalhada e técnica para um profissional de controle de pragas.
-              
-              REQUISITOS OBRIGATÓRIOS:
-              1. Use a ferramenta Google Search para encontrar dados ATUALIZADOS sobre a praga.
-              2. MÉTODOS DE CONTROLE QUÍMICO: Liste princípios ativos recomendados, DOSAGENS EXATAS (ex: ml/L ou g/10L) e MÉTODOS DE APLICAÇÃO (ex: pulverização, atomização, iscagem).
-              3. BIOLOGIA: Descreva ciclo de vida, hábitos alimentares e locais de refúgio.
-              4. RISCOS: Mencione doenças transmitidas ou danos estruturais.
-              
-              Retorne um JSON estrito seguindo o esquema fornecido.` },
-              { inlineData: { mimeType: "image/jpeg", data: base64 } }
-            ]
-          },
-          config: { 
-            responseMimeType: "application/json", 
-            responseSchema: PEST_SCHEMA as any,
-            temperature: 0.1,
-            tools: [{ googleSearch: {} }]
-          }
-        });
-
-        const text = response.text;
-        if (!text) throw new Error("IA retornou resposta vazia.");
-        
-        const parsed = JSON.parse(text);
-        if (parsed.pest) {
-          parsed.pest.source = "IA Online (Google Search)";
-        }
-        return parsed;
-      });
       
-      return onlineResult;
+      // Tenta com Google Search primeiro (Máxima precisão)
+      try {
+        const onlineResult = await fetchWithRetry(async () => {
+          const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview', 
+            contents: {
+              parts: [
+                { text: `Identifique a praga urbana nesta imagem. 
+                Sua resposta deve ser extremamente detalhada e técnica para um profissional de controle de pragas.
+                
+                REQUISITOS OBRIGATÓRIOS:
+                1. Use a ferramenta Google Search para encontrar dados ATUALIZADOS sobre a praga.
+                2. MÉTODOS DE CONTROLE QUÍMICO: Liste princípios ativos recomendados, DOSAGENS EXATAS (ex: ml/L ou g/10L) e MÉTODOS DE APLICAÇÃO (ex: pulverização, atomização, iscagem).
+                3. BIOLOGIA: Descreva ciclo de vida, hábitos alimentares e locais de refúgio.
+                4. RISCOS: Mencione doenças transmitidas ou danos estruturais.
+                
+                Retorne um JSON estrito seguindo o esquema fornecido.` },
+                { inlineData: { mimeType: "image/jpeg", data: base64 } }
+              ]
+            },
+            config: { 
+              responseMimeType: "application/json", 
+              responseSchema: PEST_SCHEMA as any,
+              temperature: 0.1,
+              tools: [{ googleSearch: {} }]
+            }
+          });
+
+          const text = response.text;
+          if (!text) throw new Error("IA retornou resposta vazia.");
+          
+          const parsed = JSON.parse(text);
+          if (parsed.pest) {
+            parsed.pest.source = "IA Online (Google Search)";
+          }
+          return parsed;
+        }, 1); // Apenas 1 tentativa com busca para não travar o usuário
+        
+        return onlineResult;
+      } catch (searchErr: any) {
+        const errorMsg = searchErr.message || "";
+        const isQuota = errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED");
+        
+        if (isQuota) {
+          console.warn("⚠️ Cota de Busca atingida. Tentando IA pura sem Google Search...");
+          // Fallback: IA Pura sem Google Search (Cota muito maior)
+          const fallbackResult = await fetchWithRetry(async () => {
+            const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview', 
+              contents: {
+                parts: [
+                  { text: `Identifique a praga urbana nesta imagem. 
+                  Use seu conhecimento interno de entomologia urbana.
+                  Retorne um JSON estrito seguindo o esquema fornecido.` },
+                  { inlineData: { mimeType: "image/jpeg", data: base64 } }
+                ]
+              },
+              config: { 
+                responseMimeType: "application/json", 
+                responseSchema: PEST_SCHEMA as any,
+                temperature: 0.1
+              }
+            });
+
+            const text = response.text;
+            if (!text) throw new Error("IA retornou resposta vazia.");
+            
+            const parsed = JSON.parse(text);
+            if (parsed.pest) {
+              parsed.pest.source = "IA Online (Conhecimento Interno)";
+            }
+            return parsed;
+          }, 2);
+          return fallbackResult;
+        }
+        throw searchErr;
+      }
     } catch (err: any) {
       console.error("❌ FALHA NO MODO ONLINE:", err);
       let errorMsg = err.message || "Falha na comunicação com a IA";
       
-      // Tratamento amigável para erro de cota (429)
-      if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.toLowerCase().includes("exhausted")) {
-        errorMsg = "Limite de uso (Quota) atingido no Google Gemini. Aguarde 1 minuto para reset do limite por minuto, ou tente amanhã se atingiu o limite diário. Use a Identificação Local abaixo.";
+      // Tratamento amigável para erro de cota final (429)
+      if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
+        errorMsg = "Limite de uso diário atingido no Google Gemini. O Google reseta as cotas gratuitas periodicamente. Por favor, use a Identificação Local (Offline) abaixo para continuar trabalhando agora.";
       }
 
       return { 
@@ -417,51 +467,83 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
-  const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY || 
+    import.meta.env.VITE_GEMINI_API_KEY || 
+    (window as any).GEMINI_API_KEY ||
+    ""
+  ).trim();
+  
   if (!apiKey) throw new Error("Configuração: API Key não encontrada.");
   const ai = new GoogleGenAI({ apiKey });
   
-  return fetchWithRetry(async () => {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite-preview', 
-      contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use o Google Search para encontrar dados precisos sobre: nome científico, hábitos, reprodução, membros, métodos de controle físico e químico. IMPORTANTE: Na seção 'chemicalMeasures', forneça o nome do princípio ativo ou produto seguido da dosagem exata por 10 litros de água (ex: 'Bifentrina: 30ml/10L água'). Retorne em JSON puro.`,
-      config: { 
-        responseMimeType: "application/json", 
-        responseSchema: PEST_SCHEMA as any,
-        temperature: 0.1,
-        tools: [{ googleSearch: {} }]
+  try {
+    // Tenta com busca primeiro (Máxima precisão)
+    return await fetchWithRetry(async () => {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview', 
+        contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use o Google Search para encontrar dados precisos sobre: nome científico, hábitos, reprodução, membros, métodos de controle físico e químico. IMPORTANTE: Na seção 'chemicalMeasures', forneça o nome do princípio ativo ou produto seguido da dosagem exata por 10 litros de água (ex: 'Bifentrina: 30ml/10L água'). Retorne em JSON puro.`,
+        config: { 
+          responseMimeType: "application/json", 
+          responseSchema: PEST_SCHEMA as any,
+          temperature: 0.1,
+          tools: [{ googleSearch: {} }]
+        }
+      });
+      const text = response.text;
+      if (!text) throw new Error("A IA não respondeu.");
+      
+      const parsed = JSON.parse(text);
+      if (parsed.pest) {
+        parsed.pest.source = "Busca Profunda (Google Search)";
       }
-    });
-    const text = response.text;
-    if (!text) throw new Error("A IA não respondeu.");
+      return parsed;
+    }, 1);
+  } catch (err: any) {
+    const errorMsg = err.message || "";
+    const isQuota = errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED");
     
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("Dados inválidos.");
+    if (isQuota) {
+      console.warn("⚠️ Cota de Busca atingida na pesquisa por nome. Tentando IA pura...");
+      // Fallback sem busca
+      return await fetchWithRetry(async () => {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview', 
+          contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use seu conhecimento interno de entomologia urbana. Retorne em JSON puro.`,
+          config: { 
+            responseMimeType: "application/json", 
+            responseSchema: PEST_SCHEMA as any,
+            temperature: 0.1
+          }
+        });
+        const text = response.text;
+        if (!text) throw new Error("A IA não respondeu.");
+        
+        const parsed = JSON.parse(text);
+        if (parsed.pest) {
+          parsed.pest.source = "Conhecimento Interno (IA)";
+        }
+        return parsed;
+      }, 2);
+    }
     
-    const parsed = JSON.parse(jsonMatch[0]);
-    if (parsed.pest) {
-      parsed.pest.controlMethods = parsed.pest.controlMethods || [];
-      parsed.pest.physicalMeasures = parsed.pest.physicalMeasures || [];
-      parsed.pest.chemicalMeasures = parsed.pest.chemicalMeasures || [];
-      parsed.pest.source = "Pesquisa Google";
-    }
-    return parsed;
-  }).catch(err => {
-    let errorMsg = err.message || "Erro na pesquisa";
-    if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
-      errorMsg = "Limite de pesquisa atingido. Tente novamente em 1 minuto.";
-    }
     return {
       pestFound: false,
       confidence: 0,
-      message: errorMsg
+      message: errorMsg.includes("429") ? "Limite de uso atingido. Tente novamente em instantes." : errorMsg
     };
-  });
+  }
 };
 
 export const generatePestAudio = async (text: string): Promise<string | null> => {
-  const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
-  if (!apiKey) return null;
+  const apiKey = (
+    process.env.GEMINI_API_KEY || 
+    import.meta.env.VITE_GEMINI_API_KEY || 
+    (window as any).GEMINI_API_KEY ||
+    ""
+  ).trim();
+  
+  if (!apiKey || apiKey.length < 10) return null;
   const ai = new GoogleGenAI({ apiKey });
   try {
     const response = await ai.models.generateContent({
