@@ -353,12 +353,8 @@ const App: React.FC = () => {
     
     if (msg.includes("503") || msg.includes("UNAVAILABLE")) return "O servidor de IA está com alta demanda agora. Por favor, aguarde um instante e tente novamente.";
     
-    if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
-      const retryMatch = msg.match(/retry in ([\d.]+)s/);
-      if (retryMatch && retryMatch[1]) {
-        return `Limite de uso da IA atingido. Por favor, aguarde ${Math.ceil(parseFloat(retryMatch[1]))} segundos para o próximo Scan.`;
-      }
-      return "O Google Gemini está com muitas solicitações agora. Aguarde 15 segundos para o próximo Scan.";
+    if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.toLowerCase().includes("quota")) {
+      return "Limite de uso diário atingido no Google Gemini. O Google reseta as cotas gratuitas periodicamente. Por favor, use a Identificação Local (Offline) abaixo para continuar trabalhando agora.";
     }
     if (msg.includes("setPhotoOptions")) return "Hardware da câmera ocupado ou indisponível no momento. Tente novamente em instantes.";
     if (msg.includes("Permission denied") || msg.includes("denied") || msg.includes("PERMISSÃO_NEGADA")) {
@@ -991,9 +987,7 @@ const App: React.FC = () => {
                         <div>
                           <p className="text-red-800 font-bold text-[10px] uppercase tracking-wider mb-1">Diagnóstico do Sistema</p>
                           <p className="text-red-700 text-[10px] leading-relaxed font-medium">
-                            {currentResult.message.includes("429") || currentResult.message.includes("quota") 
-                              ? "Limite de uso atingido (Google Gemini). Aguarde 1 minuto para reset do limite por minuto. Se o erro persistir, a cota diária foi atingida e resetará amanhã cedo. Use a Identificação Local abaixo."
-                              : currentResult.message}
+                            {currentResult.message}
                           </p>
                           
                           {/* Botão de Fallback Manual */}
