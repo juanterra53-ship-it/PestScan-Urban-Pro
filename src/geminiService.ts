@@ -3,11 +3,10 @@ import { RecognitionResult } from "./types";
 import { ENCYCLOPEDIA_DATA } from './data/encyclopedia';
 
 /**
- * PESTSCAN PRO - SERVICE LAYER v2.7
- * Otimizado para máxima resiliência e diagnóstico de cota
+ * PESTSCAN PRO - SERVICE LAYER v2.7.1
+ * Otimizado para máxima resiliência, diagnóstico de cota e velocidade
  */
 
-// Avisa o TypeScript que o 'tf' e 'tflite' vêm do script no index.html
 declare const tf: any;
 declare const tflite: any;
 
@@ -18,12 +17,10 @@ const normalizeString = (str: string) =>
      .replace(/[^a-z0-9]/g, "")
      .trim();
 
-// Configura o caminho para os arquivos WebAssembly do TFLite
 if (typeof tflite !== 'undefined' && tflite.setWasmPath) {
   tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
 }
 
-// Helper para obter a API Key de forma ultra-resiliente
 const getApiKey = (): string => {
   try {
     // @ts-ignore
@@ -67,7 +64,7 @@ const PEST_SCHEMA = {
         physicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
         chemicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
         healthRisks: { type: Type.STRING },
-        source: { type: Type.STRING, description: "Fonte da informação" },
+        source: { type: Type.STRING },
       },
       required: ["name", "scientificName", "category", "riskLevel"]
     }
@@ -75,7 +72,6 @@ const PEST_SCHEMA = {
   required: ["pestFound", "confidence"]
 };
 
-// Função auxiliar para redimensionar imagem (evita 503 por payload grande)
 const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
@@ -99,23 +95,31 @@ const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
 
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-// Função de retry com tipagem genérica e jitter para evitar colisões de cota
-async function fetchWithRetry<T>(fn: (attempt: number) => Promise<T>, retries = 5): Promise<T> {
+// Timeout wrapper para chamadas de API
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("TIMEOUT_EXCEEDED")), timeoutMs))
+  ]);
+}
+
+async function fetchWithRetry<T>(fn: (attempt: number) => Promise<T>, retries = 3): Promise<T> {
   for (let i = 0; i < retries; i++) {
     try {
-      return await fn(i);
+      // Timeout de 25 segundos por tentativa
+      return await withTimeout(fn(i), 25000);
     } catch (error: any) {
       const msg = error.message || "";
       const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
       const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.toLowerCase().includes("high demand");
+      const isTimeout = msg === "TIMEOUT_EXCEEDED";
       
-      if ((isRateLimit || isServiceError) && i < retries - 1) {
-        // Aumentamos o tempo de espera para 429 (mínimo 5s + exponencial)
-        const baseWait = 5000;
-        const jitter = Math.random() * 1000;
-        const waitTime = Math.pow(2, i + 1) * 1000 + baseWait + jitter;
+      if ((isRateLimit || isServiceError || isTimeout) && i < retries - 1) {
+        // Reduzido o tempo de espera para melhorar a percepção de velocidade
+        const baseWait = isRateLimit ? 3000 : 1000;
+        const waitTime = Math.pow(1.5, i) * 1000 + baseWait + (Math.random() * 500);
         
-        console.warn(`[v2.7 Retry] Tentativa ${i + 1} falhou. Aguardando ${Math.round(waitTime)}ms...`);
+        console.warn(`[v2.7.1 Retry] Tentativa ${i + 1} falhou. Aguardando ${Math.round(waitTime)}ms...`);
         await delay(waitTime);
         continue;
       }
@@ -270,7 +274,7 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
   if (navigator.onLine) {
     const apiKey = getApiKey();
     if (!apiKey || apiKey.length < 10) {
-      return { pestFound: false, confidence: 0, message: "Erro: API Key ausente." };
+      return { pestFound: false, confidence: 0, message: "Erro: API Key ausente no ambiente." };
     }
 
     try {
@@ -283,7 +287,7 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
           model: currentModel,
           contents: {
             parts: [
-              { text: "Identifique a praga urbana nesta imagem. Retorne um JSON estrito." },
+              { text: "Identifique a praga urbana nesta imagem. Forneça uma ficha técnica biológica completa. Retorne um JSON estrito seguindo o esquema." },
               { inlineData: { mimeType: "image/jpeg", data: base64 } }
             ]
           },
@@ -295,22 +299,24 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
         });
 
         const text = response.text;
-        if (!text) throw new Error("Vazio");
+        if (!text) throw new Error("Resposta vazia da IA.");
         const parsed = JSON.parse(text);
         if (parsed.pest) parsed.pest.source = `IA Online (${currentModel})`;
         return parsed;
-      }, 4);
+      }, 3);
     } catch (err: any) {
       const errorMsg = err.message || JSON.stringify(err);
-      let friendlyMsg = `[v2.7] Erro: ${errorMsg.substring(0, 60)}...`;
-      if (errorMsg.includes("429")) friendlyMsg = "[v2.7] Limite de uso atingido. Use o modo Offline.";
-      if (errorMsg.includes("503")) friendlyMsg = "[v2.7] Servidor sobrecarregado. Use o modo Offline.";
+      let friendlyMsg = `[v2.7.1] Erro: ${errorMsg.substring(0, 60)}...`;
+      if (errorMsg.includes("429")) friendlyMsg = "[v2.7.1] Limite de uso atingido. Use o modo Offline.";
+      if (errorMsg.includes("503")) friendlyMsg = "[v2.7.1] Servidor sobrecarregado. Use o modo Offline.";
+      if (errorMsg === "TIMEOUT_EXCEEDED") friendlyMsg = "[v2.7.1] Tempo de resposta excedido. Verifique sua conexão ou use o modo Offline.";
+      
       return { pestFound: false, confidence: 0, message: friendlyMsg };
     }
   }
 
   if (elementToUse) return await analyzeOffline(elementToUse);
-  return { pestFound: false, confidence: 0, message: "Erro de conexão." };
+  return { pestFound: false, confidence: 0, message: "Sem conexão com a internet." };
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
@@ -322,7 +328,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
     return await fetchWithRetry<RecognitionResult>(async () => {
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview', 
-        contents: `Ficha técnica da praga: "${pestName}". Retorne JSON.`,
+        contents: `Forneça uma ficha técnica biológica completa da praga urbana: "${pestName}". Use o Google Search para dados precisos. Retorne JSON.`,
         config: { 
           responseMimeType: "application/json", 
           responseSchema: PEST_SCHEMA as any,
@@ -330,12 +336,14 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
           tools: [{ googleSearch: {} }]
         }
       });
-      const parsed = JSON.parse(response.text || "{}");
+      const text = response.text;
+      if (!text) throw new Error("IA não respondeu.");
+      const parsed = JSON.parse(text);
       if (parsed.pest) parsed.pest.source = "Google Search";
       return parsed;
-    }, 1);
+    }, 2);
   } catch (err: any) {
-    return { pestFound: false, confidence: 0, message: `[v2.7] ${err.message}` };
+    return { pestFound: false, confidence: 0, message: `[v2.7.1] ${err.message}` };
   }
 };
 
