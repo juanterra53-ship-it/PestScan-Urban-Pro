@@ -389,8 +389,8 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      // Modelos estáveis de produção
-      const MODELS = ['gemini-1.5-flash', 'gemini-1.5-flash-8b'];
+      // Modelos permitidos e otimizados (Gemini 3 Series)
+      const MODELS = ['gemini-3-flash-preview', 'gemini-flash-latest'];
 
       return await fetchWithRetry<RecognitionResult>(async (attempt) => {
         const currentModel = MODELS[attempt % MODELS.length];
@@ -465,7 +465,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
     // Tenta com busca primeiro (Máxima precisão)
     return await fetchWithRetry<RecognitionResult>(async () => {
       const response = await ai.models.generateContent({
-        model: 'gemini-1.5-flash', 
+        model: 'gemini-3-flash-preview', 
         contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use o Google Search para encontrar dados precisos sobre: nome científico, hábitos, reprodução, membros, métodos de controle físico e químico. IMPORTANTE: Na seção 'chemicalMeasures', forneça o nome do princípio ativo ou produto seguido da dosagem exata por 10 litros de água (ex: 'Bifentrina: 30ml/10L água'). Retorne em JSON puro.`,
         config: { 
           responseMimeType: "application/json", 
@@ -493,7 +493,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
       // Fallback sem busca
       return await fetchWithRetry<RecognitionResult>(async () => {
         const response = await ai.models.generateContent({
-          model: 'gemini-1.5-flash', 
+          model: 'gemini-3-flash-preview', 
           contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use seu conhecimento interno de entomologia urbana. Retorne em JSON puro.`,
           config: { 
             responseMimeType: "application/json", 
