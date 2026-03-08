@@ -73,18 +73,19 @@ const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
   });
 };
 
-const fetchWithRetry = async (fn: () => Promise<any>, retries = 3): Promise<any> => {
+const fetchWithRetry = async (fn: (attempt: number) => Promise<any>, retries = 4): Promise<any> => {
   for (let i = 0; i < retries; i++) {
     try {
-      return await fn();
+      return await fn(i);
     } catch (error: any) {
       const msg = error.message || "";
       const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
       const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.toLowerCase().includes("high demand");
       
       if ((isRateLimit || isServiceError) && i < retries - 1) {
-        const waitTime = isRateLimit ? 2000 : 1000; // Reduzido drasticamente para não travar o app
-        console.warn(`Erro temporário (${isRateLimit ? '429' : '503'}). Tentativa ${i + 1} de ${retries}. Aguardando ${waitTime/1000}s...`);
+        // Backoff exponencial: 2s, 4s, 8s...
+        const waitTime = Math.pow(2, i + 1) * 1000 + (isRateLimit ? 2000 : 0);
+        console.warn(`⚠️ Erro ${isRateLimit ? '429' : '503'} na tentativa ${i + 1}. Aguardando ${waitTime/1000}s...`);
         await delay(waitTime);
         continue;
       }
@@ -338,8 +339,8 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
 // Função auxiliar para obter variáveis de ambiente de forma segura
 export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
-  // Redimensiona a imagem para evitar erros de payload/timeout
-  const base64 = await resizeImage(base64Raw, 600); // Reduzido para 600px para ser ainda mais rápido
+  // Redimensiona a imagem para um tamanho ideal (800px é o equilíbrio entre peso e detalhe)
+  const base64 = await resizeImage(base64Raw, 800);
   
   let elementToUse = imageElement;
   
@@ -356,9 +357,9 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
     }
   }
 
-  // 1. MODO ONLINE: Se houver internet, usamos a estratégia de Duas Fases (Identificação -> Busca)
+  // 1. MODO ONLINE
   if (navigator.onLine) {
-    console.log("🌐 MODO ONLINE ATIVO: Estratégia de Duas Fases...");
+    console.log("🌐 MODO ONLINE ATIVO: Iniciando Identificação Resiliente...");
     const apiKey = (
       process.env.GEMINI_API_KEY || 
       import.meta.env.VITE_GEMINI_API_KEY || 
@@ -376,87 +377,80 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
 
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const MODEL_NAME = 'gemini-flash-latest';
+      
+      // Lista de modelos para rotação em caso de erro 503
+      const MODELS = ['gemini-1.5-flash', 'gemini-1.5-flash-8b'];
 
-      // FASE 1: Identificação Rápida (Sem Busca)
-      // Isso é muito mais rápido e estável que tentar buscar por imagem
-      const identification = await fetchWithRetry(async () => {
+      return await fetchWithRetry(async (attempt) => {
+        // Alterna o modelo a cada tentativa para "pular" clusters sobrecarregados
+        const currentModel = MODELS[attempt % MODELS.length];
+        // Só usa Google Search na primeira tentativa para economizar cota e evitar 503
+        const useSearch = attempt === 0;
+
+        console.log(`🚀 Tentativa ${attempt + 1}: Usando ${currentModel} ${useSearch ? '(com Busca)' : '(IA Pura)'}`);
+
         const response = await ai.models.generateContent({
-          model: MODEL_NAME,
+          model: currentModel,
           contents: {
             parts: [
-              { text: "Identifique apenas o nome comum e o nome científico da praga urbana nesta imagem. Retorne em JSON: { \"name\": \"...\", \"scientificName\": \"...\", \"confidence\": 0.95 }" },
+              { text: `Identifique a praga urbana nesta imagem. 
+              ${useSearch ? 'Use o Google Search para trazer dados técnicos ATUALIZADOS.' : 'Use seu conhecimento interno.'}
+              Retorne um JSON estrito seguindo o esquema:
+              {
+                "pestFound": true,
+                "confidence": 0.95,
+                "pest": {
+                  "name": "...",
+                  "scientificName": "...",
+                  "category": "...",
+                  "riskLevel": "...",
+                  "characteristics": ["..."],
+                  "anatomy": "...",
+                  "members": "...",
+                  "habits": "...",
+                  "reproduction": "...",
+                  "larvalPhase": "...",
+                  "controlMethods": ["..."],
+                  "physicalMeasures": ["..."],
+                  "chemicalMeasures": ["Princípio Ativo: Dosagem exata/10L"],
+                  "healthRisks": "...",
+                  "source": "${useSearch ? 'Google Search' : 'Conhecimento Interno'}"
+                }
+              }` },
               { inlineData: { mimeType: "image/jpeg", data: base64 } }
             ]
           },
           config: { 
             responseMimeType: "application/json",
-            temperature: 0.1
+            temperature: 0.1,
+            tools: useSearch ? [{ googleSearch: {} }] : []
           }
         });
+
         const text = response.text;
-        if (!text) throw new Error("IA não identificou a imagem.");
-        return JSON.parse(text);
-      }, 2);
-
-      if (!identification.name || identification.name.toLowerCase().includes("não identificado")) {
-        throw new Error("Não foi possível identificar a praga na imagem.");
-      }
-
-      console.log(`✅ Identificado: ${identification.name}. Iniciando FASE 2 (Busca de Detalhes)...`);
-
-      // FASE 2: Busca de Detalhes Técnicos (Usando o Nome)
-      // Agora que temos o nome, a busca é 100% precisa e rápida
-      try {
-        const details = await analyzePestByName(identification.name);
-        if (details.pestFound) {
-          return {
-            ...details,
-            confidence: identification.confidence || details.confidence,
-            message: "Identificação completa concluída com sucesso."
-          };
+        if (!text) throw new Error("IA retornou resposta vazia.");
+        
+        const parsed = JSON.parse(text);
+        if (parsed.pest) {
+          parsed.pest.source = `${parsed.pest.source || 'IA Online'} (${currentModel})`;
         }
-      } catch (searchErr) {
-        console.warn("⚠️ Falha na busca detalhada. Retornando dados básicos.", searchErr);
-      }
-
-      // Fallback: Se a busca falhar, retorna o que identificamos na Fase 1
-      return {
-        pestFound: true,
-        confidence: identification.confidence || 0.8,
-        pest: {
-          name: identification.name,
-          scientificName: identification.scientificName || "Análise Visual",
-          category: "Praga Urbana",
-          riskLevel: "Moderado",
-          characteristics: ["Identificado via análise visual rápida."],
-          anatomy: "Detalhes técnicos indisponíveis no momento.",
-          members: "N/A",
-          habits: "Consulte um especialista para hábitos específicos.",
-          reproduction: "N/A",
-          larvalPhase: "N/A",
-          controlMethods: ["Utilize métodos padrão de controle."],
-          physicalMeasures: ["Limpeza e vedação do local."],
-          chemicalMeasures: ["Consulte dosagens em rótulos de produtos autorizados."],
-          healthRisks: "Risco biológico padrão.",
-          source: "IA Online (Identificação Rápida)"
-        },
-        message: "Identificação básica concluída. Detalhes técnicos limitados devido à conexão."
-      };
+        return parsed;
+      }, 4);
 
     } catch (err: any) {
-      console.error("❌ FALHA NO MODO ONLINE:", err);
+      console.error("❌ FALHA CRÍTICA NO MODO ONLINE:", err);
       const errorMsg = err.message || "";
       
+      let friendlyMsg = "O servidor do Google está instável no momento. Por favor, use a Identificação Local (Offline) abaixo.";
       if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
-        return { pestFound: false, confidence: 0, message: "Limite de uso atingido. Use o Modo Offline abaixo." };
-      }
-      
-      if (errorMsg.includes("503") || errorMsg.toLowerCase().includes("demand")) {
-        return { pestFound: false, confidence: 0, message: "Servidor sobrecarregado. Use o Modo Offline abaixo." };
+        friendlyMsg = "Limite de uso atingido no Google Gemini. Use a Identificação Local (Offline) abaixo.";
       }
 
-      return { pestFound: false, confidence: 0, message: `Erro: ${errorMsg}` };
+      return { 
+        pestFound: false, 
+        confidence: 0, 
+        message: friendlyMsg 
+      };
     }
   }
 
