@@ -344,14 +344,28 @@ const App: React.FC = () => {
   };
 
   const formatErrorMessage = (err: any) => {
-    const msg = err.message || JSON.stringify(err);
+    let msg = err.message || JSON.stringify(err);
     console.error("Erro detalhado:", err);
+    
+    // Se a mensagem for um JSON (comum em erros do Google SDK), tentamos extrair a mensagem real
+    if (msg.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed.error && parsed.error.message) {
+          msg = parsed.error.message;
+        }
+      } catch (e) {
+        // Se falhar o parse, mantemos a original
+      }
+    }
     
     if (msg.includes("fetch") || msg.includes("NetworkError")) {
       return "Erro de Conexão: Não foi possível acessar a IA Online. Verifique sua internet ou use o Modo Offline.";
     }
     
-    if (msg.includes("503") || msg.includes("UNAVAILABLE")) return "O servidor de IA está com alta demanda agora. Por favor, aguarde um instante e tente novamente.";
+    if (msg.includes("503") || msg.includes("UNAVAILABLE") || msg.toLowerCase().includes("high demand")) {
+      return "O servidor de IA do Google está com alta demanda agora (Erro 503). Por favor, use a Identificação Local (Offline) abaixo para não parar seu trabalho.";
+    }
     
     if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.toLowerCase().includes("quota")) {
       return "Limite de uso diário atingido no Google Gemini. O Google reseta as cotas gratuitas periodicamente. Por favor, use a Identificação Local (Offline) abaixo para continuar trabalhando agora.";
