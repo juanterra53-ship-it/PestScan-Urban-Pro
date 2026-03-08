@@ -3,8 +3,8 @@ import { RecognitionResult } from "./types";
 import { ENCYCLOPEDIA_DATA } from './data/encyclopedia';
 
 /**
- * PESTSCAN PRO - SERVICE LAYER v2.5
- * Atualizado para máxima compatibilidade com Vercel e Google Gemini
+ * PESTSCAN PRO - SERVICE LAYER v2.7
+ * Otimizado para máxima resiliência e diagnóstico de cota
  */
 
 // Avisa o TypeScript que o 'tf' e 'tflite' vêm do script no index.html
@@ -23,15 +23,26 @@ if (typeof tflite !== 'undefined' && tflite.setWasmPath) {
   tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
 }
 
-// Helper para obter a API Key de forma resiliente em diferentes ambientes (Vercel, Local, Preview)
+// Helper para obter a API Key de forma ultra-resiliente
 const getApiKey = (): string => {
-  const key = (
-    import.meta.env.VITE_GEMINI_API_KEY || 
-    (window as any).VITE_GEMINI_API_KEY ||
-    (window as any).GEMINI_API_KEY ||
-    ""
-  ).trim();
-  return key;
+  try {
+    // @ts-ignore
+    const viteKey = import.meta.env?.VITE_GEMINI_API_KEY;
+    // @ts-ignore
+    const processKey = typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '';
+    
+    const key = (
+      viteKey || 
+      processKey ||
+      (window as any).VITE_GEMINI_API_KEY ||
+      (window as any).GEMINI_API_KEY ||
+      ""
+    ).trim();
+    
+    return key;
+  } catch (e) {
+    return "";
+  }
 };
 
 const PEST_SCHEMA = {
@@ -88,8 +99,8 @@ const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
 
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-// Função de retry com tipagem genérica para evitar erros de build estritos
-async function fetchWithRetry<T>(fn: (attempt: number) => Promise<T>, retries = 4): Promise<T> {
+// Função de retry com tipagem genérica e jitter para evitar colisões de cota
+async function fetchWithRetry<T>(fn: (attempt: number) => Promise<T>, retries = 5): Promise<T> {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn(i);
@@ -99,15 +110,19 @@ async function fetchWithRetry<T>(fn: (attempt: number) => Promise<T>, retries = 
       const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.toLowerCase().includes("high demand");
       
       if ((isRateLimit || isServiceError) && i < retries - 1) {
-        const waitTime = Math.pow(2, i + 1) * 1000 + (isRateLimit ? 2000 : 0);
-        console.warn(`[Retry] Tentativa ${i + 1} falhou (${isRateLimit ? '429' : '503'}). Aguardando ${waitTime}ms...`);
+        // Aumentamos o tempo de espera para 429 (mínimo 5s + exponencial)
+        const baseWait = isRateLimit ? 5000 : 2000;
+        const jitter = Math.random() * 1000;
+        const waitTime = Math.pow(2, i + 1) * 1000 + baseWait + jitter;
+        
+        console.warn(`[v2.6 Retry] Tentativa ${i + 1} falhou (${isRateLimit ? '429' : '503'}). Aguardando ${Math.round(waitTime)}ms...`);
         await delay(waitTime);
         continue;
       }
       throw error;
     }
   }
-  throw new Error("Falha após múltiplas tentativas.");
+  throw new Error("Falha após múltiplas tentativas de conexão.");
 }
 
 let localModel: any = null;
@@ -389,13 +404,14 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      // Modelos permitidos e otimizados (Gemini 3 Series)
+      // Modelos estáveis e permitidos
+      // gemini-3-flash-preview é o recomendado para tarefas de visão
       const MODELS = ['gemini-3-flash-preview', 'gemini-flash-latest'];
 
       return await fetchWithRetry<RecognitionResult>(async (attempt) => {
         const currentModel = MODELS[attempt % MODELS.length];
         
-        console.log(`🚀 Tentativa ${attempt + 1}: Usando ${currentModel}`);
+        console.log(`🚀 [v2.7] Tentativa ${attempt + 1}: Usando ${currentModel}`);
 
         const response = await ai.models.generateContent({
           model: currentModel,
@@ -409,6 +425,7 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
             responseMimeType: "application/json",
             responseSchema: PEST_SCHEMA as any,
             temperature: 0.1
+            // Removido ThinkingLevel para evitar erros em modelos que não suportam
           }
         });
 
@@ -423,15 +440,17 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
       }, 4);
 
     } catch (err: any) {
-      console.error("❌ FALHA CRÍTICA NO MODO ONLINE:", err);
-      const errorMsg = err.message || "";
+      console.error("❌ [v2.7] FALHA CRÍTICA NO MODO ONLINE:", err);
+      const errorMsg = err.message || JSON.stringify(err);
       
-      let friendlyMsg = `Erro na análise: ${errorMsg.substring(0, 50)}...`;
+      let friendlyMsg = `[v2.7] Erro na análise: ${errorMsg.substring(0, 60)}...`;
       
       if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand")) {
-        friendlyMsg = "O servidor do Google está instável no momento. Por favor, use a Identificação Local (Offline) abaixo.";
+        friendlyMsg = "[v2.7] O servidor do Google está sobrecarregado. Tente novamente em 30 segundos ou use o modo Offline.";
       } else if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
-        friendlyMsg = "Limite de uso atingido no Google Gemini. Use a Identificação Local (Offline) abaixo.";
+        friendlyMsg = "[v2.7] Limite de uso gratuito atingido (RPM). Aguarde 1 minuto para a cota resetar ou use o modo Offline.";
+      } else if (errorMsg.includes("404")) {
+        friendlyMsg = "[v2.7] Erro de configuração: Modelo não encontrado. Verifique se sua chave API tem acesso ao Gemini 3.";
       }
 
       return { 
@@ -515,7 +534,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
     return {
       pestFound: false,
       confidence: 0,
-      message: errorMsg.includes("429") ? "Limite de uso atingido. Tente novamente em instantes." : errorMsg
+      message: errorMsg.includes("429") ? "[v2.7] Limite de uso atingido. Tente novamente em instantes." : `[v2.7] ${errorMsg}`
     };
   }
 };
