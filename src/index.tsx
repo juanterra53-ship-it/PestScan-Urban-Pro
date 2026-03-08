@@ -1,561 +1,432 @@
-import { GoogleGenAI, Type, Modality, GenerateContentResponse } from "@google/genai";
-import { RecognitionResult } from "./types";
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createRoot } from 'react-dom/client';
+import { 
+  Bug, Camera, BookOpen, History, 
+  ChevronRight, ArrowLeft, Loader2, 
+  ShieldAlert, Volume2, Sparkles, 
+  AlertTriangle, X, Search, Info, Key,
+  Trash2, Clock, Hammer, FlaskConical,
+  User, Lock, Mail, LogOut, CheckCircle,
+  Database, ShieldCheck, Zap, ZapOff,
+  Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw
+} from 'lucide-react';
+import { registerSW } from 'virtual:pwa-register';
+import './index.css';
+import { supabase } from './supabaseClient';
+import { analyzePestImage, analyzePestByName, loadLocalModel, isLocalModelLoaded, getModelStatus, analyzeOffline, generatePestAudio } from './geminiService';
+import { RecognitionResult, HistoryEntry, EncyclopediaItem, PestInfo } from './types';
 import { ENCYCLOPEDIA_DATA } from './data/encyclopedia';
 
-/**
- * PESTSCAN PRO - SERVICE LAYER v2.7
- * Otimizado para máxima resiliência e diagnóstico de cota
- */
+const App: React.FC = () => {
+  const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail'>('splash');
+  const [loading, setLoading] = useState(false);
+  const [currentResult, setCurrentResult] = useState<RecognitionResult | null>(null);
+  const [selectedPest, setSelectedPest] = useState<PestInfo | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isAiSearching, setIsAiSearching] = useState(false);
+  
+  const [flashOn, setFlashOn] = useState(false);
+  const [hasFlash, setHasFlash] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [zoomCaps, setZoomCaps] = useState<{ min: number; max: number } | null>(null);
+  const touchStartDistRef = useRef<number | null>(null);
+  const initialZoomRef = useRef<number>(1);
+  
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [user, setUser] = useState<{id: string; email: string; name: string} | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isModelReady, setIsModelReady] = useState(isLocalModelLoaded());
+  const [modelStatus, setModelStatus] = useState(getModelStatus());
 
-// Avisa o TypeScript que o 'tf' e 'tflite' vêm do script no index.html
-declare const tf: any;
-declare const tflite: any;
-
-const normalizeString = (str: string) => 
-  str.toLowerCase()
-     .normalize("NFD")
-     .replace(/[\u0300-\u036f]/g, "")
-     .replace(/[^a-z0-9]/g, "")
-     .trim();
-
-// Configura o caminho para os arquivos WebAssembly do TFLite
-if (typeof tflite !== 'undefined' && tflite.setWasmPath) {
-  tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
-}
-
-// Helper para obter a API Key de forma ultra-resiliente
-const getApiKey = (): string => {
-  try {
-    // @ts-ignore
-    const viteKey = import.meta.env?.VITE_GEMINI_API_KEY;
-    // @ts-ignore
-    const processKey = typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : '';
-    
-    const key = (
-      viteKey || 
-      processKey ||
-      (window as any).VITE_GEMINI_API_KEY ||
-      (window as any).GEMINI_API_KEY ||
-      ""
-    ).trim();
-    
-    return key;
-  } catch (e) {
-    return "";
-  }
-};
-
-const PEST_SCHEMA = {
-  type: Type.OBJECT,
-  properties: {
-    pestFound: { type: Type.BOOLEAN },
-    confidence: { type: Type.NUMBER },
-    pest: {
-      type: Type.OBJECT,
-      properties: {
-        name: { type: Type.STRING },
-        scientificName: { type: Type.STRING },
-        category: { type: Type.STRING },
-        riskLevel: { type: Type.STRING },
-        characteristics: { type: Type.ARRAY, items: { type: Type.STRING } },
-        anatomy: { type: Type.STRING },
-        members: { type: Type.STRING },
-        habits: { type: Type.STRING },
-        reproduction: { type: Type.STRING },
-        larvalPhase: { type: Type.STRING },
-        controlMethods: { type: Type.ARRAY, items: { type: Type.STRING } },
-        physicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
-        chemicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
-        healthRisks: { type: Type.STRING },
-        source: { type: Type.STRING, description: "Fonte da informação" },
-      },
-      required: ["name", "scientificName", "category", "riskLevel"]
-    }
-  },
-  required: ["pestFound", "confidence"]
-};
-
-// Função auxiliar para redimensionar imagem (evita 503 por payload grande)
-const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      let width = img.width;
-      let height = img.height;
-      if (width > maxWidth) {
-        height = Math.round((height * maxWidth) / width);
-        width = maxWidth;
+  useEffect(() => {
+    const checkModel = setInterval(() => {
+      const ready = isLocalModelLoaded();
+      const status = getModelStatus();
+      setIsModelReady(ready);
+      setModelStatus(status);
+      if (ready) {
+        clearInterval(checkModel);
       }
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx?.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
+    }, 1000);
+    return () => clearInterval(checkModel);
+  }, []);
+  
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
-    img.src = `data:image/jpeg;base64,${base64}`;
-  });
-};
+  }, []);
 
-const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
-
-// Função de retry com tipagem genérica e jitter para evitar colisões de cota
-async function fetchWithRetry<T>(fn: (attempt: number) => Promise<T>, retries = 5): Promise<T> {
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fn(i);
-    } catch (error: any) {
-      const msg = error.message || "";
-      const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
-      const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.toLowerCase().includes("high demand");
-      
-      if ((isRateLimit || isServiceError) && i < retries - 1) {
-        // Aumentamos o tempo de espera para 429 (mínimo 5s + exponencial)
-        const baseWait = isRateLimit ? 5000 : 2000;
-        const jitter = Math.random() * 1000;
-        const waitTime = Math.pow(2, i + 1) * 1000 + baseWait + jitter;
-        
-        console.warn(`[v2.6 Retry] Tentativa ${i + 1} falhou (${isRateLimit ? '429' : '503'}). Aguardando ${Math.round(waitTime)}ms...`);
-        await delay(waitTime);
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error("Falha após múltiplas tentativas de conexão.");
-}
-
-let localModel: any = null;
-let isModelLoading = false;
-let modelStatus = "Inativo";
-
-export const getModelStatus = () => modelStatus;
-export const isLocalModelLoaded = () => !!localModel;
-
-// Labels correspondentes ao seu modelo treinado. 
-// IMPORTANTE: Ajuste esta lista para que os nomes sejam EXATAMENTE iguais aos da ENCYCLOPEDIA_DATA no index.tsx
-// Labels correspondentes ao seu modelo treinado. 
-// Quando você tiver o modelo universal para todas as pragas, 
-// basta atualizar esta lista na mesma ordem em que as classes foram treinadas.
-export const MODEL_LABELS = [
-  "Aranha-armadeira",
-  "Aranha-marrom",
-  "Barata-americana",
-  "Barata-alemã",
-  "Barata-oriental",
-  "Cupim-de-madeira-seca",
-  "Cupim-subterrâneo",
-  "Escorpião-amarelo",
-  "Escorpião-marrom",
-  "Formiga-carpinteira",
-  "Formiga-fantasma",
-  "Formiga-lava-pés",
-  "Mosca-doméstica",
-  "Mosca-varejeira",
-  "Aedes aegypti",
-  "Culex quinquefasciatus",
-  "Percevejo-de-cama",
-  "Rato-de-telhado",
-  "Ratazana",
-  "Camundongo"
-];
-
-export const loadLocalModel = async () => {
-  if (typeof tf === 'undefined' || typeof tflite === 'undefined') {
-    modelStatus = "Erro: Bibliotecas não carregadas";
-    console.warn("TensorFlow.js não carregado. Verifique a conexão.");
-    return;
-  }
-  if (localModel || isModelLoading) return;
-  isModelLoading = true;
-  modelStatus = "Carregando...";
-  
-  try {
-    console.log("Iniciando carregamento do modelo local...");
-    await tf.ready();
+  useEffect(() => {
+    const themeColor = (view === 'splash' || view === 'auth') ? '#022c22' : '#064e3b';
+    const bodyBg = (view === 'splash' || view === 'auth') ? '#022c22' : '#f8fafc';
     
-    // Tentamos carregar o modelo TFLite que o usuário mencionou
-    const tfliteModelUrl = '/model/modelo_barata.tflite';
-    
-    try {
-      modelStatus = "Carregando TFLite...";
-      console.log(`📡 Tentando carregar TFLite: ${tfliteModelUrl}`);
-      
-      if (tflite.setWasmPath) {
-        const wasmPath = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/';
-        tflite.setWasmPath(wasmPath);
-      }
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColor);
+    document.querySelector('meta[name="msapplication-navbutton-color"]')?.setAttribute('content', themeColor);
+    document.body.style.backgroundColor = bodyBg;
+    document.documentElement.style.backgroundColor = bodyBg;
 
-      // Timeout de 20s para o modelo
-      const loadPromise = tflite.loadTFLiteModel(tfliteModelUrl);
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Timeout ao baixar modelo")), 20000)
-      );
+    loadLocalModel();
+  }, [view]);
 
-      localModel = await Promise.race([loadPromise, timeoutPromise]);
-      console.log("✅ Modelo TFLite carregado com sucesso!");
-      modelStatus = "Ativo (TFLite)";
-      return;
-    } catch (e: any) {
-      console.warn("ℹ️ Falha ao carregar .tflite:", e.message);
-      modelStatus = `Erro TFLite: ${e.message.substring(0, 20)}...`;
-    }
+  useEffect(() => {
+    let isMounted = true;
 
-    // Fallback para o TF.js GraphModel se existir
-    try {
-      const tfjsModelUrl = '/model/model.json';
-      modelStatus = "Tentando Fallback TFJS...";
-      localModel = await tf.loadGraphModel(tfjsModelUrl);
-      console.log("✅ Modelo TF.js carregado com sucesso!");
-      modelStatus = "Ativo (TFJS)";
-    } catch (e: any) {
-      console.error("❌ Erro crítico: Nenhum modelo local pôde ser carregado.", e.message);
-      modelStatus = "Erro: Sem Modelo";
-    }
+    const init = async () => {
+      try {
+        loadLocalModel().catch(e => console.warn("Modelo offline:", e));
+        await new Promise(r => setTimeout(r, 2500));
 
-  } catch (error: any) {
-    console.error("Erro na inicialização do modelo:", error);
-    modelStatus = "Erro de Inicialização";
-  } finally {
-    isModelLoading = false;
-  }
-};
-
-export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
-  if (typeof tf === 'undefined') {
-    return { pestFound: false, confidence: 0, message: "Modo offline: Bibliotecas não carregadas." };
-  }
-  if (!localModel) {
-    return { pestFound: false, confidence: 0, message: "Modo offline: Modelo não carregado." };
-  }
-
-  try {
-    const tensor = tf.tidy(() => {
-      return tf.browser.fromPixels(imageElement)
-        .resizeNearestNeighbor([224, 224])
-        .toFloat()
-        .div(tf.scalar(255.0))
-        .expandDims();
-    });
-
-    let predictions: any;
-    if (localModel.predict) {
-      predictions = localModel.predict(tensor);
-    } else if (localModel.execute) {
-      predictions = localModel.execute(tensor);
-    }
-
-    // Se predictions for um objeto (comum em TFLite), pegamos o primeiro valor
-    let outputTensor = predictions;
-    if (predictions && typeof predictions === 'object' && !predictions.data) {
-      const keys = Object.keys(predictions);
-      outputTensor = predictions[keys[0]];
-    }
-
-    const scores = await outputTensor.data();
-    const scoresArray = Array.from(scores) as number[];
-    
-    console.log("--- DEBUG OFFLINE ---");
-    console.log("Output Shape:", outputTensor.shape);
-    console.log("Scores Length:", scoresArray.length);
-    
-    // Se o modelo tiver apenas 1 ou 2 saídas, é um modelo binário (ex: Barata vs Não Barata)
-    const labelsToUse = scoresArray.length === MODEL_LABELS.length ? MODEL_LABELS : 
-                       scoresArray.length === 1 ? ["Praga (Modelo Local)"] :
-                       scoresArray.length === 2 ? ["Praga (Modelo Local)", "Nenhuma Praga"] :
-                       Array.from({length: scoresArray.length}, (_, i) => `Classe ${i}`);
-
-    let maxScoreIndex = 0;
-    let maxScore = scoresArray[0] || 0;
-
-    if (scoresArray.length > 1) {
-      maxScore = Math.max(...scoresArray);
-      maxScoreIndex = scoresArray.indexOf(maxScore);
-    }
-
-    // Log dos Top 3 resultados para debug no console
-    const sortedIndices = [...scoresArray.keys()].sort((a, b) => scoresArray[b] - scoresArray[a]).slice(0, 3);
-    sortedIndices.forEach(idx => {
-      console.log(`${labelsToUse[idx] || `Classe ${idx}`}: ${(scoresArray[idx] * 100).toFixed(2)}%`);
-    });
-
-    // Limpeza de memória
-    tensor.dispose();
-    if (outputTensor && outputTensor.dispose) outputTensor.dispose();
-    if (predictions && predictions !== outputTensor && predictions.dispose) predictions.dispose();
-
-    // Validação de confiança mais permissiva para modelos locais (30%)
-    // Removida a trava 'allSame' pois modelos binários ou de classe única sempre retornam true para isso
-    if (maxScoreIndex === -1 || maxScore < 0.30) {
-      return {
-        pestFound: false,
-        confidence: maxScore,
-        message: "Confiança insuficiente na IA local. Tente aproximar mais a câmera."
-      };
-    }
-
-    let predictedLabel = labelsToUse[maxScoreIndex] || "Praga Detectada";
-    
-    // Se o modelo detectar "Nenhuma Praga", respeitamos
-    if (predictedLabel.toLowerCase().includes("nenhuma") || predictedLabel.toLowerCase().includes("none")) {
-       if (maxScore > 0.70) { // Só descarta se tiver muita certeza que não é nada
-         return { 
-           pestFound: false, 
-           confidence: maxScore, 
-           message: "Nenhuma praga detectada (IA Local)." 
-         };
-       } else {
-         // Se a certeza for baixa, pegamos a segunda melhor opção se existir
-         const secondBestIdx = sortedIndices[1];
-         if (secondBestIdx !== undefined && scoresArray[secondBestIdx] > 0.20) {
-            maxScoreIndex = secondBestIdx;
-            maxScore = scoresArray[secondBestIdx];
-            predictedLabel = labelsToUse[maxScoreIndex];
-         }
-       }
-    }
-
-    // Tenta encontrar na enciclopédia local (Busca mais agressiva)
-    const searchName = normalizeString(predictedLabel);
-    
-    let localPest = ENCYCLOPEDIA_DATA.find(p => {
-      const pName = normalizeString(p.name);
-      const pSci = normalizeString(p.details.scientificName || "");
-      return pName === searchName || 
-             pName.includes(searchName) || 
-             searchName.includes(pName) ||
-             pSci.includes(searchName);
-    });
-
-    if (localPest) {
-      return {
-        pestFound: true,
-        confidence: maxScore,
-        pest: { 
-          ...localPest.details,
-          scientificName: `${localPest.details.scientificName} (IA Local)`,
-          source: "Identificação Offline"
-        },
-        message: "Identificado via motor local."
-      };
-    }
-
-    // Se não achou na enciclopédia, retorna um objeto genérico mas com o nome da praga
-    return {
-      pestFound: true,
-      confidence: maxScore,
-      pest: {
-        name: predictedLabel,
-        scientificName: "Análise Local",
-        category: "Praga Urbana",
-        riskLevel: "Moderado",
-        characteristics: ["Detectado pelo modelo TFLite"],
-        anatomy: "Informações detalhadas requerem conexão online.",
-        members: "N/A",
-        habits: "Análise offline concluída.",
-        reproduction: "N/A",
-        larvalPhase: "N/A",
-        controlMethods: ["Utilize métodos padrão de controle para esta espécie."],
-        physicalMeasures: ["Mantenha o local limpo", "Vede frestas e buracos"],
-        chemicalMeasures: ["Consulte um profissional para dosagens específicas"],
-        healthRisks: "Pode representar riscos à saúde."
-      },
-      message: "Identificado via IA Local (Base Reduzida)."
-    };
-  } catch (error) {
-    console.error("Erro na inferência offline:", error);
-    return { pestFound: false, confidence: 0, message: "Erro no processamento offline." };
-  }
-};
-
-// Função auxiliar para obter variáveis de ambiente de forma segura
-export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
-  // Redimensiona a imagem para 512px (Otimizado para velocidade e estabilidade)
-  const base64 = await resizeImage(base64Raw, 512);
-  
-  let elementToUse = imageElement;
-  
-  if (!elementToUse) {
-    try {
-      elementToUse = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = reject;
-        img.src = `data:image/jpeg;base64,${base64}`;
-      });
-    } catch (e) {
-      console.error("Erro ao preparar imagem:", e);
-    }
-  }
-
-  // 1. MODO ONLINE
-  if (navigator.onLine) {
-    console.log("🌐 MODO ONLINE ATIVO: Iniciando Identificação Resiliente...");
-    const apiKey = getApiKey();
-    
-    if (!apiKey || apiKey.length < 10) {
-      return { 
-        pestFound: false, 
-        confidence: 0, 
-        message: "Erro: Chave API Gemini não configurada no Vercel." 
-      };
-    }
-
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      
-      // Modelos estáveis e permitidos
-      // gemini-3-flash-preview é o recomendado para tarefas de visão
-      const MODELS = ['gemini-3-flash-preview', 'gemini-flash-latest'];
-
-      return await fetchWithRetry<RecognitionResult>(async (attempt) => {
-        const currentModel = MODELS[attempt % MODELS.length];
-        
-        console.log(`🚀 [v2.7] Tentativa ${attempt + 1}: Usando ${currentModel}`);
-
-        const response = await ai.models.generateContent({
-          model: currentModel,
-          contents: {
-            parts: [
-              { text: "Identifique a praga urbana nesta imagem. Forneça uma ficha técnica biológica completa. Retorne um JSON estrito seguindo o esquema fornecido." },
-              { inlineData: { mimeType: "image/jpeg", data: base64 } }
-            ]
-          },
-          config: { 
-            responseMimeType: "application/json",
-            responseSchema: PEST_SCHEMA as any,
-            temperature: 0.1
-            // Removido ThinkingLevel para evitar erros em modelos que não suportam
-          }
-        });
-
-        const text = response.text;
-        if (!text) throw new Error("IA retornou resposta vazia.");
-        
-        const parsed = JSON.parse(text);
-        if (parsed.pest) {
-          parsed.pest.source = `IA Online (${currentModel})`;
+        if (!navigator.onLine) {
+          setUser({ id: 'offline', email: 'offline@local', name: 'Modo Offline' });
+          if (isMounted) setView('main');
+          return;
         }
-        return parsed;
-      }, 4);
 
-    } catch (err: any) {
-      console.error("❌ [v2.7] FALHA CRÍTICA NO MODO ONLINE:", err);
-      const errorMsg = err.message || JSON.stringify(err);
-      
-      let friendlyMsg = `[v2.7] Erro na análise: ${errorMsg.substring(0, 60)}...`;
-      
-      if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand")) {
-        friendlyMsg = "[v2.7] O servidor do Google está sobrecarregado. Tente novamente em 30 segundos ou use o modo Offline.";
-      } else if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
-        friendlyMsg = "[v2.7] Limite de uso gratuito atingido (RPM). Aguarde 1 minuto para a cota resetar ou use o modo Offline.";
-      } else if (errorMsg.includes("404")) {
-        friendlyMsg = "[v2.7] Erro de configuração: Modelo não encontrado. Verifique se sua chave API tem acesso ao Gemini 3.";
+        const { data, error } = await supabase.auth.getSession();
+        if (!isMounted) return;
+
+        if (error) {
+           setView('auth');
+           return;
+        }
+
+        if (data.session?.user) {
+          setUser({ 
+            id: data.session.user.id, 
+            email: data.session.user.email || '', 
+            name: data.session.user.email?.split('@')[0] || 'Usuário' 
+          });
+          fetchHistory();
+          setView('main');
+        } else {
+          setView('auth');
+        }
+      } catch (err) {
+        if (isMounted) setView('auth');
       }
+    };
 
-      return { 
-        pestFound: false, 
-        confidence: 0, 
-        message: friendlyMsg 
-      };
-    }
-  }
+    init();
 
-  // 2. MODO OFFLINE: Se não houver internet, usamos o motor local
-  console.log("🔌 MODO OFFLINE ATIVO: Iniciando TFLite Local...");
-  if (elementToUse) {
-    return await analyzeOffline(elementToUse);
-  }
-  
-  return { 
-    pestFound: false, 
-    confidence: 0, 
-    message: "Não foi possível analisar a imagem. Verifique sua conexão." 
+    const { data: authListener } = supabase.auth.onAuthStateChange((event: any, session: any) => {
+      if (!isMounted) return;
+      if (session?.user) {
+        setUser({ 
+          id: session.user.id, 
+          email: session.user.email || '', 
+          name: session.user.email?.split('@')[0] || 'Usuário' 
+        });
+        fetchHistory();
+        if (view === 'splash' || view === 'auth') setView('main');
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setView('auth');
+      }
+    });
+
+    return () => { 
+      isMounted = false;
+      authListener?.subscription?.unsubscribe(); 
+    };
+  }, []);
+
+  const fetchHistory = async () => {
+    try {
+      const { data } = await supabase.from('pest_detections').select('*').order('created_at', { ascending: false }).limit(20);
+      if (data) setHistory(data.map((item: any) => ({ id: item.id, timestamp: new Date(item.created_at).getTime(), image: item.image_data, result: item.analysis_result })));
+    } catch (err) { console.error(err); }
   };
-};
 
-export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
-  const apiKey = getApiKey();
-  
-  if (!apiKey) throw new Error("Configuração: API Key não encontrada.");
-  const ai = new GoogleGenAI({ apiKey });
-  
-  try {
-    // Tenta com busca primeiro (Máxima precisão)
-    return await fetchWithRetry<RecognitionResult>(async () => {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview', 
-        contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use o Google Search para encontrar dados precisos sobre: nome científico, hábitos, reprodução, membros, métodos de controle físico e químico. IMPORTANTE: Na seção 'chemicalMeasures', forneça o nome do princípio ativo ou produto seguido da dosagem exata por 10 litros de água (ex: 'Bifentrina: 30ml/10L água'). Retorne em JSON puro.`,
-        config: { 
-          responseMimeType: "application/json", 
-          responseSchema: PEST_SCHEMA as any,
-          temperature: 0.1,
-          tools: [{ googleSearch: {} }]
-        }
-      });
-      const text = response.text;
-      if (!text) throw new Error("A IA não respondeu.");
-      
-      const parsed = JSON.parse(text);
-      if (parsed.pest) {
-        parsed.pest.source = "Busca Profunda (Google Search)";
-      }
-      return parsed;
-    }, 1);
-  } catch (err: any) {
-    const errorMsg = err.message || "";
-    const isQuota = errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED");
-    const isServiceError = errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand");
-    
-    if (isQuota || isServiceError) {
-      console.warn(`⚠️ ${isQuota ? 'Cota' : 'Sobrecarga'} atingida na pesquisa por nome. Tentando IA pura...`);
-      // Fallback sem busca
-      return await fetchWithRetry<RecognitionResult>(async () => {
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview', 
-          contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use seu conhecimento interno de entomologia urbana. Retorne em JSON puro.`,
-          config: { 
-            responseMimeType: "application/json", 
-            responseSchema: PEST_SCHEMA as any,
-            temperature: 0.1
-          }
-        });
-        const text = response.text;
-        if (!text) throw new Error("A IA não respondeu.");
-        
-        const parsed = JSON.parse(text);
-        if (parsed.pest) {
-          parsed.pest.source = "Conhecimento Interno (IA)";
-        }
-        return parsed;
-      }, 2);
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setFlashOn(false);
+    setZoom(1);
+    setZoomCaps(null);
+  };
+
+  const initCamera = useCallback(async () => {
+    setError(null); 
+    setHasFlash(false); 
+    setFlashOn(false);
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError("Câmera não suportada.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        
+        const track = stream.getVideoTracks()[0];
+        const caps = (track as any).getCapabilities?.() || {};
+        if (caps.torch) setHasFlash(true);
+        if (caps.zoom) setZoomCaps({ min: caps.zoom.min, max: caps.zoom.max });
+      }
+    } catch (e: any) { 
+      setError("Erro ao iniciar câmera.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view === 'camera') initCamera();
+    return () => stopCamera();
+  }, [view, initCamera]);
+
+  const toggleFlash = async () => {
+    if (streamRef.current && hasFlash) {
+      const track = streamRef.current.getVideoTracks()[0];
+      const next = !flashOn;
+      try {
+        await (track as any).applyConstraints({ advanced: [{ torch: next }] });
+        setFlashOn(next);
+      } catch (err) {}
+    }
+  };
+
+  const handleCapture = async () => {
+    if (view !== 'camera') { setView('camera'); return; }
+    if (!videoRef.current) return;
     
-    return {
-      pestFound: false,
-      confidence: 0,
-      message: errorMsg.includes("429") ? "[v2.7] Limite de uso atingido. Tente novamente em instantes." : `[v2.7] ${errorMsg}`
-    };
-  }
+    setLoading(true); setError(null);
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(videoRef.current, 0, 0);
+      const dataUrl = canvas.toDataURL('image/jpeg');
+      const base64 = dataUrl.split(',')[1];
+
+      const res = await analyzePestImage(base64, canvas);
+      setCurrentResult({ ...res, capturedImage: dataUrl });
+      setView('result');
+
+      if (res.pestFound && user && user.id !== 'offline') {
+        await supabase.from('pest_detections').insert({ 
+          user_id: user.id, 
+          image_data: dataUrl, 
+          pest_name: res.pest?.name || 'Scan', 
+          confidence: res.confidence, 
+          analysis_result: res 
+        });
+        fetchHistory();
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true);
+    try {
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+      const res = await analyzePestImage(dataUrl.split(',')[1]);
+      setCurrentResult({ ...res, capturedImage: dataUrl });
+      setView('result');
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAiDeepSearch = async () => {
+    if (!searchTerm.trim()) return;
+    setLoading(true); setIsAiSearching(true);
+    try {
+      const res = await analyzePestByName(searchTerm);
+      if (res.pest) {
+        setSelectedPest(res.pest);
+        setView('detail');
+      } else {
+        setError("Não encontrado.");
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false); setIsAiSearching(false);
+    }
+  };
+
+  const PestBioCard = ({ pest }: { pest: PestInfo }) => (
+    <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
+       <div className="flex justify-between items-start mb-4">
+         <div>
+           <h2 className="text-2xl font-black text-slate-900">{pest.name}</h2>
+           <p className="text-emerald-600 font-bold italic text-sm">{pest.scientificName}</p>
+         </div>
+         <div className="bg-orange-100 text-orange-600 px-3 py-1 rounded-full text-[10px] font-black uppercase">Risco {pest.riskLevel}</div>
+       </div>
+       <div className="space-y-4">
+         <p className="text-sm text-slate-600">{pest.habits}</p>
+         <div className="bg-emerald-900 p-5 rounded-[2rem] text-white space-y-4">
+           <div>
+             <h4 className="font-black text-[10px] uppercase text-emerald-300">Controle</h4>
+             <ul className="text-[11px] mt-2">{(pest.controlMethods || []).map((m, i) => <li key={i}>• {m}</li>)}</ul>
+           </div>
+           <div>
+             <h4 className="font-black text-[10px] uppercase text-emerald-300">Medidas Químicas</h4>
+             <ul className="text-[11px] mt-2">{(pest.chemicalMeasures || []).map((m, i) => <li key={i}>• {m}</li>)}</ul>
+           </div>
+         </div>
+       </div>
+    </div>
+  );
+
+  if (view === 'splash') return (
+    <div className="h-screen bg-emerald-950 flex flex-col items-center justify-center text-white p-6 text-center">
+      <Bug className="w-20 h-20 text-emerald-400 animate-bounce mb-4" />
+      <h1 className="text-3xl font-black">PestScan Pro</h1>
+      <p className="text-xs text-emerald-400/60 uppercase font-black tracking-[0.3em] mt-2">v2.7 Stable</p>
+    </div>
+  );
+
+  if (view === 'auth') return (
+    <div className="min-h-screen bg-emerald-950 flex flex-col items-center justify-center p-8">
+      <Bug className="w-12 h-12 text-emerald-400 mb-6" />
+      <form onSubmit={async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+          if (authMode === 'login') await supabase.auth.signInWithPassword({ email, password });
+          else await supabase.auth.signUp({ email, password });
+        } catch (e: any) { setError(e.message); }
+        finally { setLoading(false); }
+      }} className="w-full max-w-xs space-y-4">
+        <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-emerald-900/40 border border-emerald-800 rounded-2xl py-4 px-6 text-white" />
+        <input type="password" placeholder="Senha" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-emerald-900/40 border border-emerald-800 rounded-2xl py-4 px-6 text-white" />
+        <button className="w-full bg-emerald-600 text-white font-black py-4 rounded-2xl uppercase">Entrar</button>
+      </form>
+      <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="mt-6 text-emerald-400 text-xs font-bold uppercase">Trocar para {authMode === 'login' ? 'Cadastro' : 'Login'}</button>
+      <button onClick={() => { setUser({id:'off', email:'off', name:'Offline'}); setView('main'); }} className="mt-4 text-slate-400 text-xs font-bold uppercase underline">Modo Offline</button>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col max-w-md mx-auto relative overflow-hidden">
+      <header className="bg-emerald-900 p-6 pt-12 pb-10 rounded-b-[3.5rem] text-white sticky top-0 z-40">
+        <div className="flex justify-between items-center">
+          <div className="flex items-center gap-4">
+            <Bug className="text-emerald-400 w-8 h-8" />
+            <div>
+              <h1 className="font-black text-xl">PestScan Pro</h1>
+              <p className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">{isOnline ? 'ONLINE' : 'OFFLINE'}</p>
+            </div>
+          </div>
+          <button onClick={() => supabase.auth.signOut()} className="p-2 bg-white/10 rounded-xl"><LogOut size={20} /></button>
+        </div>
+      </header>
+
+      <main className="flex-1 p-6 pb-32 overflow-y-auto">
+        {error && <div className="bg-red-50 p-4 rounded-2xl mb-6 text-red-600 text-xs font-bold">{error}</div>}
+        
+        {view === 'main' && (
+          <div className="space-y-6">
+            <div className="relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+              <input type="text" placeholder="Pesquisar praga..." className="w-full h-14 bg-white border border-slate-100 rounded-2xl pl-12 pr-4 text-sm outline-none" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+            </div>
+            <div className="grid gap-3">
+              {ENCYCLOPEDIA_DATA.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase())).map(item => (
+                <button key={item.id} onClick={() => { setSelectedPest(item.details); setView('detail'); }} className="flex items-center gap-4 p-4 bg-white rounded-2xl border border-slate-100 shadow-sm text-left">
+                  <div className="text-2xl">{item.icon}</div>
+                  <div className="flex-1"><p className="font-black text-slate-800 text-sm">{item.name}</p></div>
+                  <ChevronRight size={18} className="text-slate-200" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {view === 'camera' && (
+          <div className="flex flex-col items-center">
+             <div className="w-full aspect-[4/5] bg-slate-900 rounded-[3rem] overflow-hidden border-4 border-white shadow-xl relative">
+                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                <div className="absolute top-4 left-4 z-50">
+                  <button onClick={() => fileInputRef.current?.click()} className="p-3 bg-black/50 text-white rounded-xl"><ImageIcon size={24} /></button>
+                  <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
+                </div>
+                {hasFlash && <button onClick={toggleFlash} className={`absolute top-4 right-4 p-3 rounded-xl ${flashOn ? 'bg-yellow-400' : 'bg-black/50 text-white'}`}><Zap size={24} /></button>}
+             </div>
+          </div>
+        )}
+
+        {view === 'history' && (
+          <div className="space-y-4">
+            {history.map(entry => (
+              <div key={entry.id} className="bg-white p-3 rounded-2xl border border-slate-100 flex gap-4 items-center">
+                <img src={entry.image} className="w-12 h-12 rounded-xl object-cover" />
+                <div className="flex-1"><p className="text-xs font-black">{entry.result.pest?.name || "Scan"}</p></div>
+                <button onClick={() => { setCurrentResult(entry.result); setView('result'); }}><ChevronRight size={20} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {view === 'result' && currentResult && (
+          <div className="space-y-6">
+            <img src={currentResult.capturedImage} className="w-full aspect-square object-cover rounded-[3rem] shadow-xl" />
+            {currentResult.pestFound && currentResult.pest ? <PestBioCard pest={currentResult.pest} /> : <div className="p-6 bg-white rounded-2xl text-center">Não identificado.</div>}
+            <button onClick={() => setView('main')} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black">FECHAR</button>
+          </div>
+        )}
+
+        {view === 'detail' && selectedPest && (
+          <div className="space-y-6">
+            <button onClick={() => setView('main')} className="text-xs font-black uppercase text-slate-400 flex items-center gap-2"><ArrowLeft size={16} /> Voltar</button>
+            <PestBioCard pest={selectedPest} />
+          </div>
+        )}
+      </main>
+
+      <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-100 px-10 pt-4 pb-10 flex justify-around items-center z-50 rounded-t-[3rem] shadow-lg">
+        <button onClick={() => setView('main')} className={view === 'main' ? 'text-emerald-600' : 'text-slate-300'}><BookOpen size={24} /></button>
+        <button onClick={handleCapture} className="w-16 h-16 -mt-12 bg-emerald-600 rounded-full flex items-center justify-center text-white shadow-xl"><Camera size={28} /></button>
+        <button onClick={() => setView('history')} className={view === 'history' ? 'text-emerald-600' : 'text-slate-300'}><History size={24} /></button>
+      </nav>
+
+      {loading && (
+        <div className="fixed inset-0 bg-emerald-950/90 z-[100] flex flex-col items-center justify-center text-white">
+          <Loader2 className="w-12 h-12 animate-spin text-emerald-400 mb-4" />
+          <p className="font-black uppercase tracking-widest">Processando...</p>
+        </div>
+      )}
+    </div>
+  );
 };
 
-export const generatePestAudio = async (text: string): Promise<string | null> => {
-  const apiKey = getApiKey();
-  
-  if (!apiKey || apiKey.length < 10) return null;
-  const ai = new GoogleGenAI({ apiKey });
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text }] }],
-      config: { 
-        responseModalities: [Modality.AUDIO],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
-      }
-    });
-    const result = response as GenerateContentResponse;
-    return result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
-  } catch (err) {
-    return null;
-  }
-};
+const container = document.getElementById('root');
+if (container) {
+  const root = createRoot(container);
+  root.render(<App />);
+}
