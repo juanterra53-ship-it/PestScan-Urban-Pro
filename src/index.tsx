@@ -267,12 +267,30 @@ const App: React.FC = () => {
       setCurrentResult(resultWithImage);
       setView('result');
 
-      // Salvar histórico
+      // Salvar histórico e upload
       if (res.pestFound && user && user.id !== 'offline') {
         try {
+          let imageUrl = dataUrl;
+
+          // Tenta upload para o Storage
+          try {
+            const blob = await (await fetch(dataUrl)).blob();
+            const fileName = `${user.id}/${Date.now()}.jpg`;
+            const { error: uploadError } = await supabase.storage
+              .from('pest_detections')
+              .upload(fileName, blob, { contentType: 'image/jpeg', cacheControl: '3600' });
+
+            if (!uploadError) {
+              const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
+              imageUrl = data.publicUrl;
+            }
+          } catch (uploadErr) {
+            console.warn("Upload falhou, salvando base64:", uploadErr);
+          }
+
           await supabase.from('pest_detections').insert({ 
             user_id: user.id, 
-            image_data: dataUrl, 
+            image_data: imageUrl, 
             pest_name: res.pest?.name || 'Scan', 
             confidence: res.confidence, 
             analysis_result: resultWithImage 
@@ -307,7 +325,40 @@ const App: React.FC = () => {
       
       setCurrentResult(resultWithImage);
       setView('result');
+
+      // Salvar histórico e upload para arquivo também
+      if (res.pestFound && user && user.id !== 'offline') {
+        try {
+          let imageUrl = dataUrl;
+
+          try {
+            const fileName = `${user.id}/${Date.now()}_file.jpg`;
+            const { error: uploadError } = await supabase.storage
+              .from('pest_detections')
+              .upload(fileName, file, { contentType: file.type, cacheControl: '3600' });
+
+            if (!uploadError) {
+              const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
+              imageUrl = data.publicUrl;
+            }
+          } catch (uploadErr) {
+            console.warn("Upload de arquivo falhou:", uploadErr);
+          }
+
+          await supabase.from('pest_detections').insert({ 
+            user_id: user.id, 
+            image_data: imageUrl, 
+            pest_name: res.pest?.name || 'Scan', 
+            confidence: res.confidence, 
+            analysis_result: resultWithImage 
+          });
+          fetchHistory();
+        } catch (e) {
+          console.warn("Erro ao salvar histórico de arquivo:", e);
+        }
+      }
     } catch (e: any) {
+      console.error("Erro ao processar arquivo:", e);
       setError(e.message || "Erro ao processar arquivo.");
     } finally {
       setLoading(false);
