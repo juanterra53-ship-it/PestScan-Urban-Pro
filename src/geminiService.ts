@@ -111,11 +111,11 @@ async function fetchWithRetry<T>(fn: (attempt: number) => Promise<T>, retries = 
       
       if ((isRateLimit || isServiceError) && i < retries - 1) {
         // Aumentamos o tempo de espera para 429 (mínimo 5s + exponencial)
-        const baseWait = isRateLimit ? 5000 : 2000;
+        const baseWait = 5000;
         const jitter = Math.random() * 1000;
         const waitTime = Math.pow(2, i + 1) * 1000 + baseWait + jitter;
         
-        console.warn(`[v2.6 Retry] Tentativa ${i + 1} falhou (${isRateLimit ? '429' : '503'}). Aguardando ${Math.round(waitTime)}ms...`);
+        console.warn(`[v2.7 Retry] Tentativa ${i + 1} falhou. Aguardando ${Math.round(waitTime)}ms...`);
         await delay(waitTime);
         continue;
       }
@@ -132,38 +132,17 @@ let modelStatus = "Inativo";
 export const getModelStatus = () => modelStatus;
 export const isLocalModelLoaded = () => !!localModel;
 
-// Labels correspondentes ao seu modelo treinado. 
-// IMPORTANTE: Ajuste esta lista para que os nomes sejam EXATAMENTE iguais aos da ENCYCLOPEDIA_DATA no index.tsx
-// Labels correspondentes ao seu modelo treinado. 
-// Quando você tiver o modelo universal para todas as pragas, 
-// basta atualizar esta lista na mesma ordem em que as classes foram treinadas.
 export const MODEL_LABELS = [
-  "Aranha-armadeira",
-  "Aranha-marrom",
-  "Barata-americana",
-  "Barata-alemã",
-  "Barata-oriental",
-  "Cupim-de-madeira-seca",
-  "Cupim-subterrâneo",
-  "Escorpião-amarelo",
-  "Escorpião-marrom",
-  "Formiga-carpinteira",
-  "Formiga-fantasma",
-  "Formiga-lava-pés",
-  "Mosca-doméstica",
-  "Mosca-varejeira",
-  "Aedes aegypti",
-  "Culex quinquefasciatus",
-  "Percevejo-de-cama",
-  "Rato-de-telhado",
-  "Ratazana",
-  "Camundongo"
+  "Aranha-armadeira", "Aranha-marrom", "Barata-americana", "Barata-alemã", "Barata-oriental",
+  "Cupim-de-madeira-seca", "Cupim-subterrâneo", "Escorpião-amarelo", "Escorpião-marrom",
+  "Formiga-carpinteira", "Formiga-fantasma", "Formiga-lava-pés", "Mosca-doméstica",
+  "Mosca-varejeira", "Aedes aegypti", "Culex quinquefasciatus", "Percevejo-de-cama",
+  "Rato-de-telhado", "Ratazana", "Camundongo"
 ];
 
 export const loadLocalModel = async () => {
   if (typeof tf === 'undefined' || typeof tflite === 'undefined') {
     modelStatus = "Erro: Bibliotecas não carregadas";
-    console.warn("TensorFlow.js não carregado. Verifique a conexão.");
     return;
   }
   if (localModel || isModelLoading) return;
@@ -171,50 +150,29 @@ export const loadLocalModel = async () => {
   modelStatus = "Carregando...";
   
   try {
-    console.log("Iniciando carregamento do modelo local...");
     await tf.ready();
-    
-    // Tentamos carregar o modelo TFLite que o usuário mencionou
     const tfliteModelUrl = '/model/modelo_barata.tflite';
     
     try {
-      modelStatus = "Carregando TFLite...";
-      console.log(`📡 Tentando carregar TFLite: ${tfliteModelUrl}`);
-      
       if (tflite.setWasmPath) {
-        const wasmPath = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/';
-        tflite.setWasmPath(wasmPath);
+        tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
       }
-
-      // Timeout de 20s para o modelo
       const loadPromise = tflite.loadTFLiteModel(tfliteModelUrl);
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Timeout ao baixar modelo")), 20000)
-      );
-
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 20000));
       localModel = await Promise.race([loadPromise, timeoutPromise]);
-      console.log("✅ Modelo TFLite carregado com sucesso!");
       modelStatus = "Ativo (TFLite)";
       return;
-    } catch (e: any) {
-      console.warn("ℹ️ Falha ao carregar .tflite:", e.message);
-      modelStatus = `Erro TFLite: ${e.message.substring(0, 20)}...`;
+    } catch (e) {
+      console.warn("TFLite Load Error:", e);
     }
 
-    // Fallback para o TF.js GraphModel se existir
     try {
-      const tfjsModelUrl = '/model/model.json';
-      modelStatus = "Tentando Fallback TFJS...";
-      localModel = await tf.loadGraphModel(tfjsModelUrl);
-      console.log("✅ Modelo TF.js carregado com sucesso!");
+      localModel = await tf.loadGraphModel('/model/model.json');
       modelStatus = "Ativo (TFJS)";
-    } catch (e: any) {
-      console.error("❌ Erro crítico: Nenhum modelo local pôde ser carregado.", e.message);
+    } catch (e) {
       modelStatus = "Erro: Sem Modelo";
     }
-
-  } catch (error: any) {
-    console.error("Erro na inicialização do modelo:", error);
+  } catch (error) {
     modelStatus = "Erro de Inicialização";
   } finally {
     isModelLoading = false;
@@ -222,11 +180,8 @@ export const loadLocalModel = async () => {
 };
 
 export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
-  if (typeof tf === 'undefined') {
-    return { pestFound: false, confidence: 0, message: "Modo offline: Bibliotecas não carregadas." };
-  }
-  if (!localModel) {
-    return { pestFound: false, confidence: 0, message: "Modo offline: Modelo não carregado." };
+  if (typeof tf === 'undefined' || !localModel) {
+    return { pestFound: false, confidence: 0, message: "Modo offline indisponível." };
   }
 
   try {
@@ -238,109 +193,39 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         .expandDims();
     });
 
-    let predictions: any;
-    if (localModel.predict) {
-      predictions = localModel.predict(tensor);
-    } else if (localModel.execute) {
-      predictions = localModel.execute(tensor);
-    }
-
-    // Se predictions for um objeto (comum em TFLite), pegamos o primeiro valor
+    let predictions = localModel.predict ? localModel.predict(tensor) : localModel.execute(tensor);
     let outputTensor = predictions;
     if (predictions && typeof predictions === 'object' && !predictions.data) {
-      const keys = Object.keys(predictions);
-      outputTensor = predictions[keys[0]];
+      outputTensor = predictions[Object.keys(predictions)[0]];
     }
 
     const scores = await outputTensor.data();
     const scoresArray = Array.from(scores) as number[];
     
-    console.log("--- DEBUG OFFLINE ---");
-    console.log("Output Shape:", outputTensor.shape);
-    console.log("Scores Length:", scoresArray.length);
-    
-    // Se o modelo tiver apenas 1 ou 2 saídas, é um modelo binário (ex: Barata vs Não Barata)
-    const labelsToUse = scoresArray.length === MODEL_LABELS.length ? MODEL_LABELS : 
-                       scoresArray.length === 1 ? ["Praga (Modelo Local)"] :
-                       scoresArray.length === 2 ? ["Praga (Modelo Local)", "Nenhuma Praga"] :
-                       Array.from({length: scoresArray.length}, (_, i) => `Classe ${i}`);
+    const labelsToUse = scoresArray.length === MODEL_LABELS.length ? MODEL_LABELS : ["Praga Detectada"];
+    const maxScore = Math.max(...scoresArray);
+    const maxScoreIndex = scoresArray.indexOf(maxScore);
 
-    let maxScoreIndex = 0;
-    let maxScore = scoresArray[0] || 0;
-
-    if (scoresArray.length > 1) {
-      maxScore = Math.max(...scoresArray);
-      maxScoreIndex = scoresArray.indexOf(maxScore);
-    }
-
-    // Log dos Top 3 resultados para debug no console
-    const sortedIndices = [...scoresArray.keys()].sort((a, b) => scoresArray[b] - scoresArray[a]).slice(0, 3);
-    sortedIndices.forEach(idx => {
-      console.log(`${labelsToUse[idx] || `Classe ${idx}`}: ${(scoresArray[idx] * 100).toFixed(2)}%`);
-    });
-
-    // Limpeza de memória
     tensor.dispose();
-    if (outputTensor && outputTensor.dispose) outputTensor.dispose();
-    if (predictions && predictions !== outputTensor && predictions.dispose) predictions.dispose();
+    if (outputTensor?.dispose) outputTensor.dispose();
 
-    // Validação de confiança mais permissiva para modelos locais (30%)
-    // Removida a trava 'allSame' pois modelos binários ou de classe única sempre retornam true para isso
-    if (maxScoreIndex === -1 || maxScore < 0.30) {
-      return {
-        pestFound: false,
-        confidence: maxScore,
-        message: "Confiança insuficiente na IA local. Tente aproximar mais a câmera."
-      };
+    if (maxScore < 0.30) {
+      return { pestFound: false, confidence: maxScore, message: "Confiança insuficiente." };
     }
 
-    let predictedLabel = labelsToUse[maxScoreIndex] || "Praga Detectada";
-    
-    // Se o modelo detectar "Nenhuma Praga", respeitamos
-    if (predictedLabel.toLowerCase().includes("nenhuma") || predictedLabel.toLowerCase().includes("none")) {
-       if (maxScore > 0.70) { // Só descarta se tiver muita certeza que não é nada
-         return { 
-           pestFound: false, 
-           confidence: maxScore, 
-           message: "Nenhuma praga detectada (IA Local)." 
-         };
-       } else {
-         // Se a certeza for baixa, pegamos a segunda melhor opção se existir
-         const secondBestIdx = sortedIndices[1];
-         if (secondBestIdx !== undefined && scoresArray[secondBestIdx] > 0.20) {
-            maxScoreIndex = secondBestIdx;
-            maxScore = scoresArray[secondBestIdx];
-            predictedLabel = labelsToUse[maxScoreIndex];
-         }
-       }
-    }
-
-    // Tenta encontrar na enciclopédia local (Busca mais agressiva)
+    const predictedLabel = labelsToUse[maxScoreIndex] || "Praga Detectada";
     const searchName = normalizeString(predictedLabel);
-    
-    let localPest = ENCYCLOPEDIA_DATA.find(p => {
-      const pName = normalizeString(p.name);
-      const pSci = normalizeString(p.details.scientificName || "");
-      return pName === searchName || 
-             pName.includes(searchName) || 
-             searchName.includes(pName) ||
-             pSci.includes(searchName);
-    });
+    const localPest = ENCYCLOPEDIA_DATA.find(p => normalizeString(p.name).includes(searchName));
 
     if (localPest) {
       return {
         pestFound: true,
         confidence: maxScore,
-        pest: { 
-          ...localPest.details,
-          scientificName: `${localPest.details.scientificName} (IA Local)`,
-          source: "Identificação Offline"
-        },
+        pest: { ...localPest.details, source: "IA Local" },
         message: "Identificado via motor local."
       };
     }
 
-    // Se não achou na enciclopédia, retorna um objeto genérico mas com o nome da praga
     return {
       pestFound: true,
       confidence: maxScore,
@@ -349,30 +234,26 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         scientificName: "Análise Local",
         category: "Praga Urbana",
         riskLevel: "Moderado",
-        characteristics: ["Detectado pelo modelo TFLite"],
-        anatomy: "Informações detalhadas requerem conexão online.",
+        characteristics: ["Detectado localmente"],
+        anatomy: "Conecte-se para mais detalhes.",
         members: "N/A",
-        habits: "Análise offline concluída.",
+        habits: "Análise offline.",
         reproduction: "N/A",
         larvalPhase: "N/A",
-        controlMethods: ["Utilize métodos padrão de controle para esta espécie."],
-        physicalMeasures: ["Mantenha o local limpo", "Vede frestas e buracos"],
-        chemicalMeasures: ["Consulte um profissional para dosagens específicas"],
-        healthRisks: "Pode representar riscos à saúde."
+        controlMethods: ["Métodos padrão."],
+        physicalMeasures: ["Limpeza"],
+        chemicalMeasures: ["Consulte profissional"],
+        healthRisks: "Risco à saúde."
       },
-      message: "Identificado via IA Local (Base Reduzida)."
+      message: "Identificado via IA Local."
     };
   } catch (error) {
-    console.error("Erro na inferência offline:", error);
-    return { pestFound: false, confidence: 0, message: "Erro no processamento offline." };
+    return { pestFound: false, confidence: 0, message: "Erro offline." };
   }
 };
 
-// Função auxiliar para obter variáveis de ambiente de forma segura
 export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
-  // Redimensiona a imagem para 512px (Otimizado para velocidade e estabilidade)
   const base64 = await resizeImage(base64Raw, 512);
-  
   let elementToUse = imageElement;
   
   if (!elementToUse) {
@@ -383,41 +264,26 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
         img.onerror = reject;
         img.src = `data:image/jpeg;base64,${base64}`;
       });
-    } catch (e) {
-      console.error("Erro ao preparar imagem:", e);
-    }
+    } catch (e) {}
   }
 
-  // 1. MODO ONLINE
   if (navigator.onLine) {
-    console.log("🌐 MODO ONLINE ATIVO: Iniciando Identificação Resiliente...");
     const apiKey = getApiKey();
-    
     if (!apiKey || apiKey.length < 10) {
-      return { 
-        pestFound: false, 
-        confidence: 0, 
-        message: "Erro: Chave API Gemini não configurada no Vercel." 
-      };
+      return { pestFound: false, confidence: 0, message: "Erro: API Key ausente." };
     }
 
     try {
       const ai = new GoogleGenAI({ apiKey });
-      
-      // Modelos estáveis e permitidos
-      // gemini-3-flash-preview é o recomendado para tarefas de visão
       const MODELS = ['gemini-3-flash-preview', 'gemini-flash-latest'];
 
       return await fetchWithRetry<RecognitionResult>(async (attempt) => {
         const currentModel = MODELS[attempt % MODELS.length];
-        
-        console.log(`🚀 [v2.7] Tentativa ${attempt + 1}: Usando ${currentModel}`);
-
         const response = await ai.models.generateContent({
           model: currentModel,
           contents: {
             parts: [
-              { text: "Identifique a praga urbana nesta imagem. Forneça uma ficha técnica biológica completa. Retorne um JSON estrito seguindo o esquema fornecido." },
+              { text: "Identifique a praga urbana nesta imagem. Retorne um JSON estrito." },
               { inlineData: { mimeType: "image/jpeg", data: base64 } }
             ]
           },
@@ -425,67 +291,38 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
             responseMimeType: "application/json",
             responseSchema: PEST_SCHEMA as any,
             temperature: 0.1
-            // Removido ThinkingLevel para evitar erros em modelos que não suportam
           }
         });
 
         const text = response.text;
-        if (!text) throw new Error("IA retornou resposta vazia.");
-        
+        if (!text) throw new Error("Vazio");
         const parsed = JSON.parse(text);
-        if (parsed.pest) {
-          parsed.pest.source = `IA Online (${currentModel})`;
-        }
+        if (parsed.pest) parsed.pest.source = `IA Online (${currentModel})`;
         return parsed;
       }, 4);
-
     } catch (err: any) {
-      console.error("❌ [v2.7] FALHA CRÍTICA NO MODO ONLINE:", err);
       const errorMsg = err.message || JSON.stringify(err);
-      
-      let friendlyMsg = `[v2.7] Erro na análise: ${errorMsg.substring(0, 60)}...`;
-      
-      if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand")) {
-        friendlyMsg = "[v2.7] O servidor do Google está sobrecarregado. Tente novamente em 30 segundos ou use o modo Offline.";
-      } else if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
-        friendlyMsg = "[v2.7] Limite de uso gratuito atingido (RPM). Aguarde 1 minuto para a cota resetar ou use o modo Offline.";
-      } else if (errorMsg.includes("404")) {
-        friendlyMsg = "[v2.7] Erro de configuração: Modelo não encontrado. Verifique se sua chave API tem acesso ao Gemini 3.";
-      }
-
-      return { 
-        pestFound: false, 
-        confidence: 0, 
-        message: friendlyMsg 
-      };
+      let friendlyMsg = `[v2.7] Erro: ${errorMsg.substring(0, 60)}...`;
+      if (errorMsg.includes("429")) friendlyMsg = "[v2.7] Limite de uso atingido. Use o modo Offline.";
+      if (errorMsg.includes("503")) friendlyMsg = "[v2.7] Servidor sobrecarregado. Use o modo Offline.";
+      return { pestFound: false, confidence: 0, message: friendlyMsg };
     }
   }
 
-  // 2. MODO OFFLINE: Se não houver internet, usamos o motor local
-  console.log("🔌 MODO OFFLINE ATIVO: Iniciando TFLite Local...");
-  if (elementToUse) {
-    return await analyzeOffline(elementToUse);
-  }
-  
-  return { 
-    pestFound: false, 
-    confidence: 0, 
-    message: "Não foi possível analisar a imagem. Verifique sua conexão." 
-  };
+  if (elementToUse) return await analyzeOffline(elementToUse);
+  return { pestFound: false, confidence: 0, message: "Erro de conexão." };
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
   const apiKey = getApiKey();
-  
-  if (!apiKey) throw new Error("Configuração: API Key não encontrada.");
+  if (!apiKey) throw new Error("API Key ausente.");
   const ai = new GoogleGenAI({ apiKey });
   
   try {
-    // Tenta com busca primeiro (Máxima precisão)
     return await fetchWithRetry<RecognitionResult>(async () => {
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview', 
-        contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use o Google Search para encontrar dados precisos sobre: nome científico, hábitos, reprodução, membros, métodos de controle físico e químico. IMPORTANTE: Na seção 'chemicalMeasures', forneça o nome do princípio ativo ou produto seguido da dosagem exata por 10 litros de água (ex: 'Bifentrina: 30ml/10L água'). Retorne em JSON puro.`,
+        contents: `Ficha técnica da praga: "${pestName}". Retorne JSON.`,
         config: { 
           responseMimeType: "application/json", 
           responseSchema: PEST_SCHEMA as any,
@@ -493,56 +330,18 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
           tools: [{ googleSearch: {} }]
         }
       });
-      const text = response.text;
-      if (!text) throw new Error("A IA não respondeu.");
-      
-      const parsed = JSON.parse(text);
-      if (parsed.pest) {
-        parsed.pest.source = "Busca Profunda (Google Search)";
-      }
+      const parsed = JSON.parse(response.text || "{}");
+      if (parsed.pest) parsed.pest.source = "Google Search";
       return parsed;
     }, 1);
   } catch (err: any) {
-    const errorMsg = err.message || "";
-    const isQuota = errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED");
-    const isServiceError = errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand");
-    
-    if (isQuota || isServiceError) {
-      console.warn(`⚠️ ${isQuota ? 'Cota' : 'Sobrecarga'} atingida na pesquisa por nome. Tentando IA pura...`);
-      // Fallback sem busca
-      return await fetchWithRetry<RecognitionResult>(async () => {
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview', 
-          contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use seu conhecimento interno de entomologia urbana. Retorne em JSON puro.`,
-          config: { 
-            responseMimeType: "application/json", 
-            responseSchema: PEST_SCHEMA as any,
-            temperature: 0.1
-          }
-        });
-        const text = response.text;
-        if (!text) throw new Error("A IA não respondeu.");
-        
-        const parsed = JSON.parse(text);
-        if (parsed.pest) {
-          parsed.pest.source = "Conhecimento Interno (IA)";
-        }
-        return parsed;
-      }, 2);
-    }
-    
-    return {
-      pestFound: false,
-      confidence: 0,
-      message: errorMsg.includes("429") ? "[v2.7] Limite de uso atingido. Tente novamente em instantes." : `[v2.7] ${errorMsg}`
-    };
+    return { pestFound: false, confidence: 0, message: `[v2.7] ${err.message}` };
   }
 };
 
 export const generatePestAudio = async (text: string): Promise<string | null> => {
   const apiKey = getApiKey();
-  
-  if (!apiKey || apiKey.length < 10) return null;
+  if (!apiKey) return null;
   const ai = new GoogleGenAI({ apiKey });
   try {
     const response = await ai.models.generateContent({
@@ -553,8 +352,7 @@ export const generatePestAudio = async (text: string): Promise<string | null> =>
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
       }
     });
-    const result = response as GenerateContentResponse;
-    return result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
+    return (response as any).candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
   } catch (err) {
     return null;
   }
