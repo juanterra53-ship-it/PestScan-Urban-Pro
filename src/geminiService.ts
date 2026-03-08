@@ -1,6 +1,11 @@
-import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { GoogleGenAI, Type, Modality, GenerateContentResponse } from "@google/genai";
 import { RecognitionResult } from "./types";
 import { ENCYCLOPEDIA_DATA } from './data/encyclopedia';
+
+/**
+ * PESTSCAN PRO - SERVICE LAYER v2.5
+ * Atualizado para máxima compatibilidade com Vercel e Google Gemini
+ */
 
 // Avisa o TypeScript que o 'tf' e 'tflite' vêm do script no index.html
 declare const tf: any;
@@ -13,10 +18,21 @@ const normalizeString = (str: string) =>
      .replace(/[^a-z0-9]/g, "")
      .trim();
 
-// Configura o caminho para os arquivos WebAssembly do TFLite (necessário para .tflite)
+// Configura o caminho para os arquivos WebAssembly do TFLite
 if (typeof tflite !== 'undefined' && tflite.setWasmPath) {
   tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
 }
+
+// Helper para obter a API Key de forma resiliente em diferentes ambientes (Vercel, Local, Preview)
+const getApiKey = (): string => {
+  const key = (
+    import.meta.env.VITE_GEMINI_API_KEY || 
+    (window as any).VITE_GEMINI_API_KEY ||
+    (window as any).GEMINI_API_KEY ||
+    ""
+  ).trim();
+  return key;
+};
 
 const PEST_SCHEMA = {
   type: Type.OBJECT,
@@ -40,16 +56,13 @@ const PEST_SCHEMA = {
         physicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
         chemicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
         healthRisks: { type: Type.STRING },
-        source: { type: Type.STRING, description: "Fonte da informação (ex: 'Pesquisa Google' ou 'Banco de Dados Local')" },
+        source: { type: Type.STRING, description: "Fonte da informação" },
       },
       required: ["name", "scientificName", "category", "riskLevel"]
     }
   },
   required: ["pestFound", "confidence"]
 };
-
-// Função auxiliar para aguardar tempo determinado (Exponential Backoff)
-const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 // Função auxiliar para redimensionar imagem (evita 503 por payload grande)
 const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
@@ -73,7 +86,10 @@ const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
   });
 };
 
-const fetchWithRetry = async (fn: (attempt: number) => Promise<any>, retries = 4): Promise<any> => {
+const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+// Função de retry com tipagem genérica para evitar erros de build estritos
+async function fetchWithRetry<T>(fn: (attempt: number) => Promise<T>, retries = 4): Promise<T> {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn(i);
@@ -83,16 +99,16 @@ const fetchWithRetry = async (fn: (attempt: number) => Promise<any>, retries = 4
       const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.toLowerCase().includes("high demand");
       
       if ((isRateLimit || isServiceError) && i < retries - 1) {
-        // Backoff exponencial: 2s, 4s, 8s...
         const waitTime = Math.pow(2, i + 1) * 1000 + (isRateLimit ? 2000 : 0);
-        console.warn(`⚠️ Erro ${isRateLimit ? '429' : '503'} na tentativa ${i + 1}. Aguardando ${waitTime/1000}s...`);
+        console.warn(`[Retry] Tentativa ${i + 1} falhou (${isRateLimit ? '429' : '503'}). Aguardando ${waitTime}ms...`);
         await delay(waitTime);
         continue;
       }
       throw error;
     }
   }
-};
+  throw new Error("Falha após múltiplas tentativas.");
+}
 
 let localModel: any = null;
 let isModelLoading = false;
@@ -339,8 +355,8 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
 // Função auxiliar para obter variáveis de ambiente de forma segura
 export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
-  // Redimensiona a imagem para um tamanho ideal (800px é o equilíbrio entre peso e detalhe)
-  const base64 = await resizeImage(base64Raw, 800);
+  // Redimensiona a imagem para 512px (Otimizado para velocidade e estabilidade)
+  const base64 = await resizeImage(base64Raw, 512);
   
   let elementToUse = imageElement;
   
@@ -360,70 +376,39 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
   // 1. MODO ONLINE
   if (navigator.onLine) {
     console.log("🌐 MODO ONLINE ATIVO: Iniciando Identificação Resiliente...");
-    const apiKey = (
-      process.env.GEMINI_API_KEY || 
-      import.meta.env.VITE_GEMINI_API_KEY || 
-      (window as any).GEMINI_API_KEY ||
-      ""
-    ).trim();
+    const apiKey = getApiKey();
     
     if (!apiKey || apiKey.length < 10) {
       return { 
         pestFound: false, 
         confidence: 0, 
-        message: "Erro: Chave API Gemini não configurada." 
+        message: "Erro: Chave API Gemini não configurada no Vercel." 
       };
     }
 
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      // Lista de modelos para rotação em caso de erro 503
+      // Modelos estáveis de produção
       const MODELS = ['gemini-1.5-flash', 'gemini-1.5-flash-8b'];
 
-      return await fetchWithRetry(async (attempt) => {
-        // Alterna o modelo a cada tentativa para "pular" clusters sobrecarregados
+      return await fetchWithRetry<RecognitionResult>(async (attempt) => {
         const currentModel = MODELS[attempt % MODELS.length];
-        // Só usa Google Search na primeira tentativa para economizar cota e evitar 503
-        const useSearch = attempt === 0;
-
-        console.log(`🚀 Tentativa ${attempt + 1}: Usando ${currentModel} ${useSearch ? '(com Busca)' : '(IA Pura)'}`);
+        
+        console.log(`🚀 Tentativa ${attempt + 1}: Usando ${currentModel}`);
 
         const response = await ai.models.generateContent({
           model: currentModel,
           contents: {
             parts: [
-              { text: `Identifique a praga urbana nesta imagem. 
-              ${useSearch ? 'Use o Google Search para trazer dados técnicos ATUALIZADOS.' : 'Use seu conhecimento interno.'}
-              Retorne um JSON estrito seguindo o esquema:
-              {
-                "pestFound": true,
-                "confidence": 0.95,
-                "pest": {
-                  "name": "...",
-                  "scientificName": "...",
-                  "category": "...",
-                  "riskLevel": "...",
-                  "characteristics": ["..."],
-                  "anatomy": "...",
-                  "members": "...",
-                  "habits": "...",
-                  "reproduction": "...",
-                  "larvalPhase": "...",
-                  "controlMethods": ["..."],
-                  "physicalMeasures": ["..."],
-                  "chemicalMeasures": ["Princípio Ativo: Dosagem exata/10L"],
-                  "healthRisks": "...",
-                  "source": "${useSearch ? 'Google Search' : 'Conhecimento Interno'}"
-                }
-              }` },
+              { text: "Identifique a praga urbana nesta imagem. Forneça uma ficha técnica biológica completa. Retorne um JSON estrito seguindo o esquema fornecido." },
               { inlineData: { mimeType: "image/jpeg", data: base64 } }
             ]
           },
           config: { 
             responseMimeType: "application/json",
-            temperature: 0.1,
-            tools: useSearch ? [{ googleSearch: {} }] : []
+            responseSchema: PEST_SCHEMA as any,
+            temperature: 0.1
           }
         });
 
@@ -432,7 +417,7 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
         
         const parsed = JSON.parse(text);
         if (parsed.pest) {
-          parsed.pest.source = `${parsed.pest.source || 'IA Online'} (${currentModel})`;
+          parsed.pest.source = `IA Online (${currentModel})`;
         }
         return parsed;
       }, 4);
@@ -441,8 +426,11 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
       console.error("❌ FALHA CRÍTICA NO MODO ONLINE:", err);
       const errorMsg = err.message || "";
       
-      let friendlyMsg = "O servidor do Google está instável no momento. Por favor, use a Identificação Local (Offline) abaixo.";
-      if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
+      let friendlyMsg = `Erro na análise: ${errorMsg.substring(0, 50)}...`;
+      
+      if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand")) {
+        friendlyMsg = "O servidor do Google está instável no momento. Por favor, use a Identificação Local (Offline) abaixo.";
+      } else if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
         friendlyMsg = "Limite de uso atingido no Google Gemini. Use a Identificação Local (Offline) abaixo.";
       }
 
@@ -468,21 +456,16 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
-  const apiKey = (
-    process.env.GEMINI_API_KEY || 
-    import.meta.env.VITE_GEMINI_API_KEY || 
-    (window as any).GEMINI_API_KEY ||
-    ""
-  ).trim();
+  const apiKey = getApiKey();
   
   if (!apiKey) throw new Error("Configuração: API Key não encontrada.");
   const ai = new GoogleGenAI({ apiKey });
   
   try {
     // Tenta com busca primeiro (Máxima precisão)
-    return await fetchWithRetry(async () => {
+    return await fetchWithRetry<RecognitionResult>(async () => {
       const response = await ai.models.generateContent({
-        model: 'gemini-flash-latest', 
+        model: 'gemini-1.5-flash', 
         contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use o Google Search para encontrar dados precisos sobre: nome científico, hábitos, reprodução, membros, métodos de controle físico e químico. IMPORTANTE: Na seção 'chemicalMeasures', forneça o nome do princípio ativo ou produto seguido da dosagem exata por 10 litros de água (ex: 'Bifentrina: 30ml/10L água'). Retorne em JSON puro.`,
         config: { 
           responseMimeType: "application/json", 
@@ -508,9 +491,9 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
     if (isQuota || isServiceError) {
       console.warn(`⚠️ ${isQuota ? 'Cota' : 'Sobrecarga'} atingida na pesquisa por nome. Tentando IA pura...`);
       // Fallback sem busca
-      return await fetchWithRetry(async () => {
+      return await fetchWithRetry<RecognitionResult>(async () => {
         const response = await ai.models.generateContent({
-          model: 'gemini-flash-latest', 
+          model: 'gemini-1.5-flash', 
           contents: `Forneça uma ficha técnica biológica completa da praga urbana chamada: "${pestName}". Use seu conhecimento interno de entomologia urbana. Retorne em JSON puro.`,
           config: { 
             responseMimeType: "application/json", 
@@ -538,12 +521,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
 };
 
 export const generatePestAudio = async (text: string): Promise<string | null> => {
-  const apiKey = (
-    process.env.GEMINI_API_KEY || 
-    import.meta.env.VITE_GEMINI_API_KEY || 
-    (window as any).GEMINI_API_KEY ||
-    ""
-  ).trim();
+  const apiKey = getApiKey();
   
   if (!apiKey || apiKey.length < 10) return null;
   const ai = new GoogleGenAI({ apiKey });
@@ -556,7 +534,8 @@ export const generatePestAudio = async (text: string): Promise<string | null> =>
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
       }
     });
-    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
+    const result = response as GenerateContentResponse;
+    return result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
   } catch (err) {
     return null;
   }
