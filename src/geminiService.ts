@@ -279,15 +279,18 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
 
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const MODELS = ['gemini-3-flash-preview', 'gemini-flash-latest'];
+      // gemini-3.1-flash-lite-preview costuma ter limites mais generosos e maior estabilidade
+      const MODELS = ['gemini-3.1-flash-lite-preview', 'gemini-3-flash-preview', 'gemini-flash-latest'];
 
       return await fetchWithRetry<RecognitionResult>(async (attempt) => {
         const currentModel = MODELS[attempt % MODELS.length];
+        console.log(`🚀 [v2.7.2] Analisando com ${currentModel}...`);
+        
         const response = await ai.models.generateContent({
           model: currentModel,
           contents: {
             parts: [
-              { text: "Identifique a praga urbana nesta imagem. Forneça uma ficha técnica biológica completa. Retorne um JSON estrito seguindo o esquema." },
+              { text: "Identifique a praga urbana nesta imagem. Forneça uma ficha técnica biológica completa (nome, científico, hábitos, controle, riscos). Retorne um JSON estrito seguindo o esquema." },
               { inlineData: { mimeType: "image/jpeg", data: base64 } }
             ]
           },
@@ -306,10 +309,17 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
       }, 3);
     } catch (err: any) {
       const errorMsg = err.message || JSON.stringify(err);
-      let friendlyMsg = `[v2.7.1] Erro: ${errorMsg.substring(0, 60)}...`;
-      if (errorMsg.includes("429")) friendlyMsg = "[v2.7.1] Limite de uso atingido. Use o modo Offline.";
-      if (errorMsg.includes("503")) friendlyMsg = "[v2.7.1] Servidor sobrecarregado. Use o modo Offline.";
-      if (errorMsg === "TIMEOUT_EXCEEDED") friendlyMsg = "[v2.7.1] Tempo de resposta excedido. Verifique sua conexão ou use o modo Offline.";
+      console.error("Erro Gemini:", errorMsg);
+      
+      let friendlyMsg = `[v2.7.2] Erro: ${errorMsg.substring(0, 50)}`;
+      
+      if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
+        friendlyMsg = "[v2.7.2] Limite de cota do Google atingido. A IA gratuita tem limites rígidos por minuto. Tente novamente em 60 segundos ou use o modo Offline.";
+      } else if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE")) {
+        friendlyMsg = "[v2.7.2] O servidor do Google está instável. Tente o modo Offline.";
+      } else if (errorMsg === "TIMEOUT_EXCEEDED") {
+        friendlyMsg = "[v2.7.2] Tempo de resposta excedido. Verifique sua conexão ou use o modo Offline.";
+      }
       
       return { pestFound: false, confidence: 0, message: friendlyMsg };
     }
@@ -324,26 +334,45 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
   if (!apiKey) throw new Error("API Key ausente.");
   const ai = new GoogleGenAI({ apiKey });
   
+  // Lista de modelos para fallback
+  const MODELS = ['gemini-3.1-flash-lite-preview', 'gemini-3-flash-preview'];
+
+  const trySearch = async (model: string, useSearch: boolean): Promise<RecognitionResult> => {
+    const config: any = { 
+      responseMimeType: "application/json", 
+      responseSchema: PEST_SCHEMA as any,
+      temperature: 0.1
+    };
+    
+    if (useSearch) {
+      config.tools = [{ googleSearch: {} }];
+    }
+
+    const response = await ai.models.generateContent({
+      model: model, 
+      contents: `Forneça uma ficha técnica biológica completa da praga urbana: "${pestName}". ${useSearch ? 'Use o Google Search para dados reais.' : 'Use seu conhecimento interno.'} Retorne JSON.`,
+      config: config
+    });
+    
+    const text = response.text;
+    if (!text) throw new Error("Resposta vazia.");
+    const parsed = JSON.parse(text);
+    if (parsed.pest) parsed.pest.source = useSearch ? "Google Search" : "Conhecimento IA";
+    return parsed;
+  };
+
   try {
-    return await fetchWithRetry<RecognitionResult>(async () => {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview', 
-        contents: `Forneça uma ficha técnica biológica completa da praga urbana: "${pestName}". Use o Google Search para dados precisos. Retorne JSON.`,
-        config: { 
-          responseMimeType: "application/json", 
-          responseSchema: PEST_SCHEMA as any,
-          temperature: 0.1,
-          tools: [{ googleSearch: {} }]
-        }
-      });
-      const text = response.text;
-      if (!text) throw new Error("IA não respondeu.");
-      const parsed = JSON.parse(text);
-      if (parsed.pest) parsed.pest.source = "Google Search";
-      return parsed;
-    }, 2);
+    // Tentativa 1: Com busca (mais lenta, mais precisa, gasta mais cota)
+    console.log("🔍 [v2.7.2] Buscando com Google Search...");
+    return await fetchWithRetry<RecognitionResult>(() => trySearch(MODELS[0], true), 1);
   } catch (err: any) {
-    return { pestFound: false, confidence: 0, message: `[v2.7.1] ${err.message}` };
+    console.warn("⚠️ [v2.7.2] Busca com Google Search falhou ou atingiu cota. Tentando IA pura...");
+    try {
+      // Tentativa 2: Sem busca (mais rápida, evita erro 429 de busca)
+      return await fetchWithRetry<RecognitionResult>(() => trySearch(MODELS[0], false), 2);
+    } catch (err2: any) {
+      return { pestFound: false, confidence: 0, message: `[v2.7.2] Erro de Cota: ${err2.message}` };
+    }
   }
 };
 
