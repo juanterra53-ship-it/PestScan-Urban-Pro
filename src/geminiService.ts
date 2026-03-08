@@ -359,11 +359,14 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
     try {
       const ai = new GoogleGenAI({ apiKey });
       
+      // Usamos gemini-flash-latest para maior estabilidade em momentos de pico
+      const MODEL_NAME = 'gemini-flash-latest';
+      
       // Tenta com Google Search primeiro (Máxima precisão)
       try {
         const onlineResult = await fetchWithRetry(async () => {
           const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview', 
+            model: MODEL_NAME, 
             contents: {
               parts: [
                 { text: `Identifique a praga urbana nesta imagem. 
@@ -401,13 +404,14 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
       } catch (searchErr: any) {
         const errorMsg = searchErr.message || "";
         const isQuota = errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED");
+        const isServiceError = errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand");
         
-        if (isQuota) {
-          console.warn("⚠️ Cota de Busca atingida. Tentando IA pura sem Google Search...");
-          // Fallback: IA Pura sem Google Search (Cota muito maior)
+        if (isQuota || isServiceError) {
+          console.warn(`⚠️ ${isQuota ? 'Cota' : 'Sobrecarga'} detectada. Tentando IA pura sem Google Search...`);
+          // Fallback: IA Pura sem Google Search (Cota muito maior e menos chance de 503)
           const fallbackResult = await fetchWithRetry(async () => {
             const response = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview', 
+              model: MODEL_NAME, 
               contents: {
                 parts: [
                   { text: `Identifique a praga urbana nesta imagem. 
@@ -440,9 +444,11 @@ export const analyzePestImage = async (base64: string, imageElement?: HTMLImageE
       console.error("❌ FALHA NO MODO ONLINE:", err);
       let errorMsg = err.message || "Falha na comunicação com a IA";
       
-      // Tratamento amigável para erro de cota final (429)
+      // Tratamento amigável para erro de cota ou sobrecarga final
       if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
         errorMsg = "Limite de uso diário atingido no Google Gemini. O Google reseta as cotas gratuitas periodicamente. Por favor, use a Identificação Local (Offline) abaixo para continuar trabalhando agora.";
+      } else if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE") || errorMsg.toLowerCase().includes("high demand")) {
+        errorMsg = "O servidor do Google está sobrecarregado no momento (Erro 503). Isso é temporário. Por favor, use a Identificação Local (Offline) abaixo para não parar seu trabalho.";
       }
 
       return { 
