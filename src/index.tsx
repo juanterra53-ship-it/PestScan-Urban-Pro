@@ -457,7 +457,7 @@ const App: React.FC = () => {
     <div className="h-screen bg-emerald-950 flex flex-col items-center justify-center text-white p-6 text-center">
       <Bug className="w-24 h-24 text-emerald-400 animate-bounce mb-6" />
       <h1 className="text-4xl font-black tracking-tighter">PestScan Pro</h1>
-      <p className="text-xs text-emerald-400/60 uppercase font-black tracking-[0.4em] mt-3">Inteligência Bio-Urbana</p>
+      <p className="text-xs text-emerald-400/60 uppercase font-black tracking-[0.4em] mt-3">v2.7.2 Stable</p>
       
       <div className="mt-16 flex flex-col items-center gap-3">
         <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-400' : 'bg-slate-600 animate-pulse'}`} />
@@ -812,7 +812,7 @@ const App: React.FC = () => {
       )}
 
       <div className="fixed bottom-3 right-6 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em] pointer-events-none z-[60] opacity-50">
-        v2.7 Stable
+        v2.7.2 Stable
       </div>
     </div>
   );
