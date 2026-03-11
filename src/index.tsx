@@ -266,7 +266,7 @@ const App: React.FC = () => {
       // 1. Tenta identificar localmente primeiro
       const localRes = await analyzeOffline(canvas);
       
-      if (localRes.pestFound && localRes.confidence > 0.45 && localRes.pest) {
+      if (localRes.pestFound && localRes.confidence > 0.25 && localRes.pest) {
         console.log("🔍 [Economia] Identificado localmente:", localRes.pest.name);
         
         // 2. Busca no banco se já temos uma ficha completa para esta praga
@@ -283,7 +283,8 @@ const App: React.FC = () => {
           res = {
             ...existingData[0].analysis_result,
             confidence: localRes.confidence,
-            message: "Recuperado do banco de dados (Economia de API)"
+            message: "Recuperado do banco de dados (Economia de API)",
+            source: 'Banco de Dados'
           };
         } else {
           // 3. Se não tem no banco, chama a IA Online
@@ -369,7 +370,8 @@ const App: React.FC = () => {
           res = {
             ...existingData[0].analysis_result,
             confidence: res.confidence,
-            message: "Ficha técnica otimizada (Cache)"
+            message: "Ficha técnica otimizada (Cache)",
+            source: 'Banco de Dados'
           };
         }
       }
@@ -814,9 +816,16 @@ const App: React.FC = () => {
                     <img src={entry.image} className="w-20 h-20 rounded-[2rem] object-cover shadow-inner" />
                     <div className="flex-1 overflow-hidden">
                       <p className="text-sm font-black text-slate-900 truncate mb-1">{entry.result.pest?.name || "Scan Desconhecido"}</p>
-                      <div className="flex items-center gap-2">
-                        <Clock size={12} className="text-slate-300" />
-                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{new Date(entry.timestamp).toLocaleDateString()}</p>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1">
+                          <Clock size={10} className="text-slate-300" />
+                          <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">{new Date(entry.timestamp).toLocaleDateString()}</p>
+                        </div>
+                        {entry.result.source && (
+                          <span className="text-[8px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-tighter">
+                            {entry.result.source.split(' ')[0]}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <ChevronRight size={20} className="text-slate-200 mr-2" />
@@ -834,8 +843,15 @@ const App: React.FC = () => {
                   src={currentResult.capturedImage} 
                   className="w-full aspect-square object-cover rounded-[4rem] border-8 border-white shadow-2xl" 
                 />
-                <div className="absolute top-6 right-6 bg-emerald-900/90 backdrop-blur-md px-4 py-2 rounded-2xl text-white text-[11px] font-black shadow-xl">
-                  {(currentResult.confidence * 100).toFixed(0)}% MATCH
+                <div className="absolute top-6 right-6 flex flex-col gap-2 items-end">
+                  <div className="bg-emerald-900/90 backdrop-blur-md px-4 py-2 rounded-2xl text-white text-[11px] font-black shadow-xl">
+                    {(currentResult.confidence * 100).toFixed(0)}% MATCH
+                  </div>
+                  {currentResult.source && (
+                    <div className="bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-emerald-900 text-[9px] font-black shadow-lg border border-emerald-100 uppercase tracking-widest">
+                      {currentResult.source}
+                    </div>
+                  )}
                 </div>
               </div>
             
@@ -909,6 +925,20 @@ const App: React.FC = () => {
         <button onClick={() => { setView('history'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all ${view === 'history' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
           <History size={26} />
           <span className="text-[9px] font-black uppercase tracking-widest">Scans</span>
+        </button>
+
+        <button 
+          onClick={() => {
+            if(confirm("Deseja redefinir o aplicativo? Isso limpará o cache local e configurações.")) {
+              localStorage.clear();
+              window.location.reload();
+            }
+          }}
+          className="flex flex-col items-center gap-1.5 transition-all text-slate-300 hover:text-red-400"
+          title="Redefinir App"
+        >
+          <RefreshCw size={26} />
+          <span className="text-[9px] font-black uppercase tracking-widest">Reset</span>
         </button>
       </nav>
 
