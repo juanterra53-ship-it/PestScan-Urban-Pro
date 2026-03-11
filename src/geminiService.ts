@@ -185,15 +185,17 @@ export const loadLocalModel = async () => {
   try {
     await tf.ready();
     // Priorizamos o modelo universal de 20 pragas que o usuário está treinando
-    const universalModelUrl = '/model/modelo_universal.tflite';
-    const fallbackModelUrl = '/model/modelo_barata.tflite';
+    // Adicionamos um timestamp para evitar cache de versões antigas do arquivo
+    const version = Date.now();
+    const universalModelUrl = `/model/modelo_universal.tflite?v=${version}`;
+    const fallbackModelUrl = `/model/modelo_barata.tflite?v=${version}`;
     
     try {
       if (tflite.setWasmPath) {
         tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
       }
       
-      console.log("📡 Tentando carregar Modelo Universal...");
+      console.log(`📡 Tentando carregar Modelo Universal de: ${universalModelUrl}`);
       let loadPromise = tflite.loadTFLiteModel(universalModelUrl);
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000));
       
@@ -248,19 +250,37 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     const scores = await outputTensor.data();
     const scoresArray = Array.from(scores) as number[];
+    console.log(`📊 TFLite Output Length: ${scoresArray.length}`);
     
-    const labelsToUse = scoresArray.length === MODEL_LABELS.length ? MODEL_LABELS : ["Praga Detectada"];
+    // Se o tamanho não bater, tentamos mapear o que for possível ou avisamos
+    let labelsToUse = MODEL_LABELS;
+    if (scoresArray.length !== MODEL_LABELS.length) {
+      console.warn(`⚠️ Tamanho do output (${scoresArray.length}) diferente do esperado (${MODEL_LABELS.length})`);
+      
+      if (scoresArray.length === 21) {
+        // Provável classe 'background' no índice 0
+        labelsToUse = ['Background', ...MODEL_LABELS];
+      } else if (scoresArray.length > 0) {
+        // Fallback: tenta usar os nomes disponíveis ou gera genéricos
+        labelsToUse = Array.from({ length: scoresArray.length }, (_, i) => MODEL_LABELS[i] || `Classe ${i}`);
+      }
+    }
+
     const maxScore = Math.max(...scoresArray);
     const maxScoreIndex = scoresArray.indexOf(maxScore);
 
     tensor.dispose();
     if (outputTensor?.dispose) outputTensor.dispose();
 
-    if (maxScore < 0.30) {
-      return { pestFound: false, confidence: maxScore, message: "Confiança insuficiente." };
+    if (maxScore < 0.25) {
+      return { pestFound: false, confidence: maxScore, message: "Confiança insuficiente.", source: 'IA Local' };
     }
 
     const predictedLabel = labelsToUse[maxScoreIndex] || "Praga Detectada";
+    if (predictedLabel === 'Background') {
+      return { pestFound: false, confidence: maxScore, message: "Nenhuma praga identificada com clareza.", source: 'IA Local' };
+    }
+
     const cleanName = getCleanName(predictedLabel);
     const searchName = normalizeString(cleanName);
     const localPest = ENCYCLOPEDIA_DATA.find(p => normalizeString(p.name).includes(searchName));
@@ -270,7 +290,8 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         pestFound: true,
         confidence: maxScore,
         pest: { ...localPest.details, name: cleanName, source: "IA Local" },
-        message: "Identificado via motor local."
+        message: "Identificado via motor local.",
+        source: 'IA Local'
       };
     }
 
@@ -294,7 +315,8 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         healthRisks: "Variável",
         source: "IA Local (Genérico)"
       },
-      message: "Praga reconhecida, mas sem ficha técnica local completa."
+      message: "Praga reconhecida, mas sem ficha técnica local completa.",
+      source: 'IA Local'
     };
   } catch (error) {
     return { pestFound: false, confidence: 0, message: "Erro offline." };
@@ -350,7 +372,10 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
         if (!text) throw new Error("Resposta vazia da IA.");
         const parsed = JSON.parse(text);
         if (parsed.pest) parsed.pest.source = `IA Online (${currentModel})`;
-        return parsed;
+        return {
+          ...parsed,
+          source: 'IA Online (Gemini)'
+        };
       }, 3);
     } catch (err: any) {
       const errorMsg = err.message || JSON.stringify(err);
