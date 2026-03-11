@@ -136,13 +136,42 @@ let modelStatus = "Inativo";
 export const getModelStatus = () => modelStatus;
 export const isLocalModelLoaded = () => !!localModel;
 
+// Lista exata baseada no treinamento do Google Colab (Ordem Alfabética do TensorFlow)
+// Importante: Manter os erros de digitação do treino para o mapeamento de índices funcionar
 export const MODEL_LABELS = [
-  "Aranha-armadeira", "Aranha-marrom", "Barata-americana", "Barata-alemã", "Barata-oriental",
-  "Cupim-de-madeira-seca", "Cupim-subterrâneo", "Escorpião-amarelo", "Escorpião-marrom",
-  "Formiga-carpinteira", "Formiga-fantasma", "Formiga-lava-pés", "Mosca-doméstica",
-  "Mosca-varejeira", "Aedes aegypti", "Culex quinquefasciatus", "Percevejo-de-cama",
-  "Rato-de-telhado", "Ratazana", "Camundongo"
+  'Aranha Marron',                // Índice 0
+  'Aranha armadeira',             // Índice 1
+  'Barata Oriental',              // Índice 2
+  'Barata Periplaneta Americana', // Índice 3
+  'Barata germanica',             // Índice 4
+  'Besouro vermelho da farinha',  // Índice 5
+  'Broca do Trigo',               // Índice 6
+  'Escorpião Amarelo',            // Índice 7
+  'Escorpião Amarelo do Nordeste',// Índice 8
+  'Escorpíão Marrom',             // Índice 9
+  'Formiga Carpinteira',          // Índice 10
+  'Formiga Fantasma',             // Índice 11
+  'Formiga lava pés',             // Índice 12
+  'Gorgulho do Arroz',            // Índice 13
+  'Mosca Domestica',              // Índice 14
+  'Mosca Varejeira',              // Índice 15
+  'Mosca de Banheiro',            // Índice 16
+  'Ratazana',                     // Índice 17
+  'Rato Camundongo',              // Índice 18
+  'Rato Preto'                    // Índice 19
 ];
+
+// Mapeamento para nomes bonitos na interface (Corrige os erros de digitação do treino)
+const LABEL_MAP: Record<string, string> = {
+  'Aranha Marron': 'Aranha Marrom',
+  'Aranha armadeira': 'Aranha Armadeira',
+  'Barata germanica': 'Barata Germânica',
+  'Escorpíão Marrom': 'Escorpião Marrom',
+  'Formiga lava pés': 'Formiga Lava-pés',
+  'Mosca Domestica': 'Mosca Doméstica'
+};
+
+const getCleanName = (label: string) => LABEL_MAP[label] || label;
 
 export const loadLocalModel = async () => {
   if (typeof tf === 'undefined' || typeof tflite === 'undefined') {
@@ -155,16 +184,30 @@ export const loadLocalModel = async () => {
   
   try {
     await tf.ready();
-    const tfliteModelUrl = '/model/modelo_barata.tflite';
+    // Priorizamos o modelo universal de 20 pragas que o usuário está treinando
+    const universalModelUrl = '/model/modelo_universal.tflite';
+    const fallbackModelUrl = '/model/modelo_barata.tflite';
     
     try {
       if (tflite.setWasmPath) {
         tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
       }
-      const loadPromise = tflite.loadTFLiteModel(tfliteModelUrl);
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 20000));
-      localModel = await Promise.race([loadPromise, timeoutPromise]);
-      modelStatus = "Ativo (TFLite)";
+      
+      console.log("📡 Tentando carregar Modelo Universal...");
+      let loadPromise = tflite.loadTFLiteModel(universalModelUrl);
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000));
+      
+      try {
+        localModel = await Promise.race([loadPromise, timeoutPromise]);
+        modelStatus = "Ativo (Universal)";
+        console.log("✅ Modelo Universal carregado!");
+        return;
+      } catch (e) {
+        console.warn("⚠️ Modelo Universal não encontrado, tentando fallback...");
+        loadPromise = tflite.loadTFLiteModel(fallbackModelUrl);
+        localModel = await Promise.race([loadPromise, timeoutPromise]);
+        modelStatus = "Ativo (Local)";
+      }
       return;
     } catch (e) {
       console.warn("TFLite Load Error:", e);
@@ -218,14 +261,15 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     }
 
     const predictedLabel = labelsToUse[maxScoreIndex] || "Praga Detectada";
-    const searchName = normalizeString(predictedLabel);
+    const cleanName = getCleanName(predictedLabel);
+    const searchName = normalizeString(cleanName);
     const localPest = ENCYCLOPEDIA_DATA.find(p => normalizeString(p.name).includes(searchName));
 
     if (localPest) {
       return {
         pestFound: true,
         confidence: maxScore,
-        pest: { ...localPest.details, source: "IA Local" },
+        pest: { ...localPest.details, name: cleanName, source: "IA Local" },
         message: "Identificado via motor local."
       };
     }
@@ -234,22 +278,23 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
       pestFound: true,
       confidence: maxScore,
       pest: {
-        name: predictedLabel,
+        name: cleanName,
         scientificName: "Análise Local",
         category: "Praga Urbana",
         riskLevel: "Moderado",
         characteristics: ["Detectado localmente"],
         anatomy: "Conecte-se para mais detalhes.",
         members: "N/A",
-        habits: "Análise offline.",
+        habits: "N/A",
         reproduction: "N/A",
         larvalPhase: "N/A",
-        controlMethods: ["Métodos padrão."],
-        physicalMeasures: ["Limpeza"],
-        chemicalMeasures: ["Consulte profissional"],
-        healthRisks: "Risco à saúde."
+        controlMethods: ["Consulte um profissional"],
+        physicalMeasures: ["Limpeza do local"],
+        chemicalMeasures: ["Uso de inseticidas"],
+        healthRisks: "Variável",
+        source: "IA Local (Genérico)"
       },
-      message: "Identificado via IA Local."
+      message: "Praga reconhecida, mas sem ficha técnica local completa."
     };
   } catch (error) {
     return { pestFound: false, confidence: 0, message: "Erro offline." };
