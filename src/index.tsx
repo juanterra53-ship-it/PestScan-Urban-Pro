@@ -260,10 +260,42 @@ const App: React.FC = () => {
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
       const base64 = dataUrl.split(',')[1];
 
-      // Análise
-      const res = await analyzePestImage(base64, canvas);
-      const resultWithImage = { ...res, capturedImage: dataUrl };
+      let res: RecognitionResult;
+
+      // --- LÓGICA DE ECONOMIA DE API (CACHE HÍBRIDO) ---
+      // 1. Tenta identificar localmente primeiro
+      const localRes = await analyzeOffline(canvas);
       
+      if (localRes.pestFound && localRes.confidence > 0.45 && localRes.pest) {
+        console.log("🔍 [Economia] Identificado localmente:", localRes.pest.name);
+        
+        // 2. Busca no banco se já temos uma ficha completa para esta praga
+        const { data: existingData } = await supabase
+          .from('pest_detections')
+          .select('analysis_result')
+          .eq('pest_name', localRes.pest.name)
+          .not('analysis_result', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (existingData && existingData.length > 0 && existingData[0].analysis_result.pestFound) {
+          console.log("💰 [Economia] Ficha técnica encontrada no banco! Economizando API.");
+          res = {
+            ...existingData[0].analysis_result,
+            confidence: localRes.confidence,
+            message: "Recuperado do banco de dados (Economia de API)"
+          };
+        } else {
+          // 3. Se não tem no banco, chama a IA Online
+          console.log("🌐 [Economia] Ficha não encontrada no banco. Chamando IA Online...");
+          res = await analyzePestImage(base64, canvas);
+        }
+      } else {
+        // Se a IA local falhou ou confiança baixa, vai direto para a online
+        res = await analyzePestImage(base64, canvas);
+      }
+
+      const resultWithImage = { ...res, capturedImage: dataUrl };
       setCurrentResult(resultWithImage);
       setView('result');
 
@@ -271,8 +303,6 @@ const App: React.FC = () => {
       if (res.pestFound && user && user.id !== 'offline') {
         try {
           let imageUrl = dataUrl;
-
-          // Tenta upload para o Storage
           try {
             const blob = await (await fetch(dataUrl)).blob();
             const fileName = `${user.id}/${Date.now()}.jpg`;
@@ -285,7 +315,7 @@ const App: React.FC = () => {
               imageUrl = data.publicUrl;
             }
           } catch (uploadErr) {
-            console.warn("Upload falhou, salvando base64:", uploadErr);
+            console.warn("Upload falhou:", uploadErr);
           }
 
           await supabase.from('pest_detections').insert({ 
@@ -320,7 +350,30 @@ const App: React.FC = () => {
         reader.readAsDataURL(file);
       });
       
-      const res = await analyzePestImage(dataUrl.split(',')[1]);
+      const resRaw = await analyzePestImage(dataUrl.split(',')[1]);
+      let res = resRaw;
+
+      // --- LÓGICA DE ECONOMIA DE API PARA UPLOAD ---
+      // Se a IA Online identificou algo, vamos ver se já temos uma ficha melhor no banco
+      if (res.pestFound && res.pest) {
+        const { data: existingData } = await supabase
+          .from('pest_detections')
+          .select('analysis_result')
+          .eq('pest_name', res.pest.name)
+          .not('analysis_result', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (existingData && existingData.length > 0) {
+          console.log("💰 [Economia] Usando ficha técnica otimizada do banco.");
+          res = {
+            ...existingData[0].analysis_result,
+            confidence: res.confidence,
+            message: "Ficha técnica otimizada (Cache)"
+          };
+        }
+      }
+
       const resultWithImage = { ...res, capturedImage: dataUrl };
       
       setCurrentResult(resultWithImage);
@@ -370,6 +423,23 @@ const App: React.FC = () => {
     if (!searchTerm.trim()) return;
     setLoading(true); setIsAiSearching(true); setError(null);
     try {
+      // 1. Tenta buscar no banco primeiro (Economia de API)
+      const { data: existingData } = await supabase
+        .from('pest_detections')
+        .select('analysis_result')
+        .ilike('pest_name', `%${searchTerm}%`)
+        .not('analysis_result', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (existingData && existingData.length > 0 && existingData[0].analysis_result.pest) {
+        console.log("💰 [Economia] Busca profunda recuperada do banco.");
+        setSelectedPest(existingData[0].analysis_result.pest);
+        setView('detail');
+        return;
+      }
+
+      // 2. Se não tem no banco, chama a IA
       const res = await analyzePestByName(searchTerm);
       if (res.pest) {
         setSelectedPest(res.pest);
