@@ -106,20 +106,21 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 async function fetchWithRetry<T>(fn: (attempt: number) => Promise<T>, retries = 3): Promise<T> {
   for (let i = 0; i < retries; i++) {
     try {
-      // Timeout de 25 segundos por tentativa
-      return await withTimeout(fn(i), 25000);
+      // Timeout aumentado para 45 segundos para suportar conexões 3G instáveis
+      return await withTimeout(fn(i), 45000);
     } catch (error: any) {
       const msg = error.message || "";
       const isRateLimit = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
       const isServiceError = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.toLowerCase().includes("high demand");
       const isTimeout = msg === "TIMEOUT_EXCEEDED";
+      const isFetchError = msg.includes("Failed to fetch");
       
-      if ((isRateLimit || isServiceError || isTimeout) && i < retries - 1) {
-        // Reduzido o tempo de espera para melhorar a percepção de velocidade
-        const baseWait = isRateLimit ? 3000 : 1000;
-        const waitTime = Math.pow(1.5, i) * 1000 + baseWait + (Math.random() * 500);
+      if ((isRateLimit || isServiceError || isTimeout || isFetchError) && i < retries - 1) {
+        // Espera progressiva maior para erros de rede
+        const baseWait = isFetchError ? 5000 : (isRateLimit ? 3000 : 1000);
+        const waitTime = Math.pow(2, i) * 1000 + baseWait + (Math.random() * 1000);
         
-        console.warn(`[v2.7.1 Retry] Tentativa ${i + 1} falhou. Aguardando ${Math.round(waitTime)}ms...`);
+        console.warn(`[v2.7.3 Retry] Tentativa ${i + 1} falhou (${msg}). Aguardando ${Math.round(waitTime)}ms...`);
         await delay(waitTime);
         continue;
       }
@@ -184,11 +185,9 @@ export const loadLocalModel = async () => {
   
   try {
     await tf.ready();
-    // Priorizamos o modelo universal de 20 pragas que o usuário está treinando
-    // Adicionamos um timestamp para evitar cache de versões antigas do arquivo
-    const version = Date.now();
-    const universalModelUrl = `/model/modelo_universal.tflite?v=${version}`;
-    const fallbackModelUrl = `/model/modelo_barata.tflite?v=${version}`;
+    // Removemos o timestamp para permitir que o navegador use o cache offline
+    const universalModelUrl = `/model/modelo_universal.tflite`;
+    const fallbackModelUrl = `/model/modelo_barata.tflite`;
     
     try {
       if (tflite.setWasmPath) {
@@ -196,23 +195,32 @@ export const loadLocalModel = async () => {
       }
       
       console.log(`📡 Tentando carregar Modelo Universal de: ${universalModelUrl}`);
-      let loadPromise = tflite.loadTFLiteModel(universalModelUrl);
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000));
       
+      const tryLoad = async (url: string) => {
+        const loadPromise = tflite.loadTFLiteModel(url);
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 20000));
+        return await Promise.race([loadPromise, timeoutPromise]);
+      };
+
       try {
-        localModel = await Promise.race([loadPromise, timeoutPromise]);
+        localModel = await tryLoad(universalModelUrl);
         modelStatus = "Ativo (Universal)";
         console.log("✅ Modelo Universal carregado!");
         return;
       } catch (e) {
-        console.warn("⚠️ Modelo Universal não encontrado, tentando fallback...");
-        loadPromise = tflite.loadTFLiteModel(fallbackModelUrl);
-        localModel = await Promise.race([loadPromise, timeoutPromise]);
-        modelStatus = "Ativo (Local)";
+        console.warn("⚠️ Modelo Universal falhou, tentando fallback...");
+        try {
+          localModel = await tryLoad(fallbackModelUrl);
+          modelStatus = "Ativo (Local)";
+        } catch (e2) {
+          console.error("❌ Todos os modelos TFLite falharam:", e2);
+          throw e2;
+        }
       }
       return;
-    } catch (e) {
-      console.warn("TFLite Load Error:", e);
+    } catch (e: any) {
+      console.error("❌ Erro ao carregar modelos TFLite:", e);
+      modelStatus = `Erro: ${e.message || 'Falha no carregamento'}`;
     }
 
     try {
@@ -230,17 +238,21 @@ export const loadLocalModel = async () => {
 
 export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
   if (typeof tf === 'undefined' || !localModel) {
-    return { pestFound: false, confidence: 0, message: "Modo offline indisponível." };
+    return { 
+      pestFound: false, 
+      confidence: 0, 
+      message: "Motor local não carregado. Aguarde a inicialização ou conecte-se à internet para baixar o motor de IA." 
+    };
   }
 
   try {
     const tensor = tf.tidy(() => {
       const img = tf.browser.fromPixels(imageElement);
-      // Alguns modelos TFLite (especialmente do Teachable Machine) 
-      // funcionam melhor com normalização [0, 1] ou [-1, 1]
+      // Normalização padrão Teachable Machine: (x / 127.5) - 1
       return img.resizeBilinear([224, 224])
         .toFloat()
-        .div(tf.scalar(255.0))
+        .sub(tf.scalar(127.5))
+        .div(tf.scalar(127.5))
         .expandDims();
     });
 
@@ -287,10 +299,14 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     // Lógica de mapeamento de labels
     let labelsToUse = MODEL_LABELS;
     if (scoresArray.length === 21) {
-      // Se o Rato Preto (que é o último) está aparecendo como Gorgulho (que está no meio), 
-      // é provável que o Background esteja no INÍCIO deslocando tudo.
+      // Testes indicam que o Background em modelos Teachable Machine/Google Colab 
+      // costuma ser a PRIMEIRA classe (índice 0) quando exportado via script padrão.
+      // Vamos tentar o mapeamento com Background no início novamente, mas com log extra.
       labelsToUse = ['Background', ...MODEL_LABELS];
-    } else if (scoresArray.length !== MODEL_LABELS.length) {
+    } else if (scoresArray.length === 20) {
+      labelsToUse = MODEL_LABELS;
+    } else {
+      console.warn(`⚠️ Tamanho do output (${scoresArray.length}) inesperado.`);
       labelsToUse = Array.from({ length: scoresArray.length }, (_, i) => MODEL_LABELS[i] || `Classe ${i}`);
     }
 
@@ -410,7 +426,7 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
       let friendlyMsg = `[v2.7.2] Erro: ${errorMsg.substring(0, 50)}`;
       
       if (errorMsg.includes("Failed to fetch")) {
-        friendlyMsg = "[v2.7.2] Erro de Conexão: Não foi possível alcançar os servidores da IA. Verifique sua internet ou use o Modo Offline.";
+        friendlyMsg = "[v2.7.3] Erro de Conexão: Não foi possível alcançar os servidores da IA. Verifique sua internet (3G instável?) ou use o Modo Offline.";
       } else if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
         friendlyMsg = "[v2.7.2] Limite de cota do Google atingido. A IA gratuita tem limites rígidos por minuto. Tente novamente em 60 segundos ou use o modo Offline.";
       } else if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE")) {
@@ -469,7 +485,11 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
       // Tentativa 2: Sem busca (mais rápida, evita erro 429 de busca)
       return await fetchWithRetry<RecognitionResult>(() => trySearch(MODELS[0], false), 2);
     } catch (err2: any) {
-      return { pestFound: false, confidence: 0, message: `[v2.7.2] Erro de Cota: ${err2.message}` };
+      let msg = err2.message || "Erro desconhecido";
+      if (msg.includes("Failed to fetch")) {
+        msg = "Erro de Conexão: Falha ao buscar dados da praga. Verifique sua internet.";
+      }
+      return { pestFound: false, confidence: 0, message: `[v2.7.2] ${msg}` };
     }
   }
 };
