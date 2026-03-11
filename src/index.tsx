@@ -657,7 +657,7 @@ const App: React.FC = () => {
           let msg = e.message || e.error_description || (typeof e === 'string' ? e : "Erro de autenticação");
           
           if (msg.includes("Failed to fetch")) {
-            msg = "Erro de Conexão: Não foi possível alcançar o servidor. Verifique sua internet ou as configurações do Supabase.";
+            msg = "Erro de Conexão: Não foi possível alcançar o servidor. Verifique sua internet ou as configurações do Supabase (URL/Key) no menu Settings.";
           }
           
           setError(msg); 
@@ -682,7 +682,10 @@ const App: React.FC = () => {
         {authMode === 'login' ? 'Não tem conta? Cadastre-se' : 'Já possui conta? Faça Login'}
       </button>
       
-      <button onClick={() => { setUser({ id: 'offline', email: 'offline@local', name: 'Modo Offline' }); setView('main'); }} className="mt-6 text-slate-500 text-[10px] font-black uppercase tracking-widest underline decoration-slate-700 underline-offset-4">
+      <button 
+        onClick={() => { setUser({ id: 'offline', email: 'offline@local', name: 'Modo Offline' }); setView('main'); }} 
+        className={`mt-6 text-[10px] font-black uppercase tracking-widest underline underline-offset-4 transition-all ${error?.includes("Erro de Conexão") ? "text-emerald-400 scale-110 decoration-emerald-400" : "text-slate-500 decoration-slate-700"}`}
+      >
         Entrar em Modo de Campo (Offline)
       </button>
     </div>
