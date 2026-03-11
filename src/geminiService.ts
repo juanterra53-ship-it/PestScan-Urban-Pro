@@ -139,26 +139,26 @@ export const isLocalModelLoaded = () => !!localModel;
 // Lista exata baseada no treinamento do Google Colab (Ordem Alfabética do TensorFlow)
 // Importante: Manter os erros de digitação do treino para o mapeamento de índices funcionar
 export const MODEL_LABELS = [
-  'Aranha Marron',                // Índice 0
-  'Aranha armadeira',             // Índice 1
-  'Barata Oriental',              // Índice 2
-  'Barata Periplaneta Americana', // Índice 3
-  'Barata germanica',             // Índice 4
-  'Besouro vermelho da farinha',  // Índice 5
-  'Broca do Trigo',               // Índice 6
-  'Escorpião Amarelo',            // Índice 7
-  'Escorpião Amarelo do Nordeste',// Índice 8
-  'Escorpíão Marrom',             // Índice 9
-  'Formiga Carpinteira',          // Índice 10
-  'Formiga Fantasma',             // Índice 11
-  'Formiga lava pés',             // Índice 12
-  'Gorgulho do Arroz',            // Índice 13
-  'Mosca Domestica',              // Índice 14
-  'Mosca Varejeira',              // Índice 15
-  'Mosca de Banheiro',            // Índice 16
-  'Ratazana',                     // Índice 17
-  'Rato Camundongo',              // Índice 18
-  'Rato Preto'                    // Índice 19
+  'Aranha armadeira',             // 0
+  'Aranha Marron',                // 1
+  'Barata germanica',             // 2
+  'Barata Oriental',              // 3
+  'Barata Periplaneta Americana', // 4
+  'Besouro vermelho da farinha',  // 5
+  'Broca do Trigo',               // 6
+  'Escorpião Amarelo',            // 7
+  'Escorpião Amarelo do Nordeste',// 8
+  'Escorpíão Marrom',             // 9
+  'Formiga Carpinteira',          // 10
+  'Formiga Fantasma',             // 11
+  'Formiga lava pés',             // 12
+  'Gorgulho do Arroz',            // 13
+  'Mosca de Banheiro',            // 14
+  'Mosca Domestica',              // 15
+  'Mosca Varejeira',              // 16
+  'Ratazana',                     // 17
+  'Rato Camundongo',              // 18
+  'Rato Preto'                    // 19
 ];
 
 // Mapeamento para nomes bonitos na interface (Corrige os erros de digitação do treino)
@@ -235,8 +235,10 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
   try {
     const tensor = tf.tidy(() => {
-      return tf.browser.fromPixels(imageElement)
-        .resizeNearestNeighbor([224, 224])
+      const img = tf.browser.fromPixels(imageElement);
+      // Alguns modelos TFLite (especialmente do Teachable Machine) 
+      // funcionam melhor com normalização [0, 1] ou [-1, 1]
+      return img.resizeBilinear([224, 224])
         .toFloat()
         .div(tf.scalar(255.0))
         .expandDims();
@@ -244,26 +246,52 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     let predictions = localModel.predict ? localModel.predict(tensor) : localModel.execute(tensor);
     let outputTensor = predictions;
+    
+    // Se for um objeto (comum em modelos mult-output), pega o primeiro tensor
     if (predictions && typeof predictions === 'object' && !predictions.data) {
-      outputTensor = predictions[Object.keys(predictions)[0]];
+      const keys = Object.keys(predictions);
+      outputTensor = predictions[keys[0]];
+      console.log(`📦 Usando output tensor: ${keys[0]}`);
     }
 
     const scores = await outputTensor.data();
     const scoresArray = Array.from(scores) as number[];
-    console.log(`📊 TFLite Output Length: ${scoresArray.length}`);
     
-    // Se o tamanho não bater, tentamos mapear o que for possível ou avisamos
-    let labelsToUse = MODEL_LABELS;
-    if (scoresArray.length !== MODEL_LABELS.length) {
-      console.warn(`⚠️ Tamanho do output (${scoresArray.length}) diferente do esperado (${MODEL_LABELS.length})`);
-      
+    console.log("-----------------------------------");
+    console.log(`📊 Shape do Output: ${outputTensor.shape}`);
+    console.log(`📊 Tamanho do Array: ${scoresArray.length}`);
+    
+    // Mostra os valores brutos dos primeiros 5 índices para debug
+    console.log(`🔢 Primeiros 5 scores: ${scoresArray.slice(0, 5).map(s => s.toFixed(4)).join(', ')}`);
+    
+    const topIndices = scoresArray
+      .map((score, index) => ({ score, index }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+
+    console.log("🏆 Top 3 Predições Locais:");
+    topIndices.forEach((item, i) => {
+      // Tenta mapear o índice. Se for 21 classes, Background costuma ser a última (20) ou a primeira (0)
+      let label = `Classe ${item.index}`;
       if (scoresArray.length === 21) {
-        // Provável classe 'background' no índice 0
-        labelsToUse = ['Background', ...MODEL_LABELS];
-      } else if (scoresArray.length > 0) {
-        // Fallback: tenta usar os nomes disponíveis ou gera genéricos
-        labelsToUse = Array.from({ length: scoresArray.length }, (_, i) => MODEL_LABELS[i] || `Classe ${i}`);
+        if (item.index === 0) label = "Background (Fundo)";
+        else if (item.index === 20) label = "Background (Fundo)";
+        else label = MODEL_LABELS[item.index] || MODEL_LABELS[item.index - 1] || `Classe ${item.index}`;
+      } else {
+        label = MODEL_LABELS[item.index] || `Classe ${item.index}`;
       }
+      console.log(`${i+1}. ${label}: ${(item.score * 100).toFixed(2)}% (Index: ${item.index})`);
+    });
+    console.log("-----------------------------------");
+    
+    // Lógica de mapeamento de labels
+    let labelsToUse = MODEL_LABELS;
+    if (scoresArray.length === 21) {
+      // Se o Rato Preto (que é o último) está aparecendo como Gorgulho (que está no meio), 
+      // é provável que o Background esteja no INÍCIO deslocando tudo.
+      labelsToUse = ['Background', ...MODEL_LABELS];
+    } else if (scoresArray.length !== MODEL_LABELS.length) {
+      labelsToUse = Array.from({ length: scoresArray.length }, (_, i) => MODEL_LABELS[i] || `Classe ${i}`);
     }
 
     const maxScore = Math.max(...scoresArray);
@@ -272,11 +300,9 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     tensor.dispose();
     if (outputTensor?.dispose) outputTensor.dispose();
 
-    if (maxScore < 0.25) {
-      return { pestFound: false, confidence: maxScore, message: "Confiança insuficiente.", source: 'IA Local' };
-    }
-
     const predictedLabel = labelsToUse[maxScoreIndex] || "Praga Detectada";
+    const isLowConfidence = maxScore < 0.25;
+    
     if (predictedLabel === 'Background') {
       return { pestFound: false, confidence: maxScore, message: "Nenhuma praga identificada com clareza.", source: 'IA Local' };
     }
@@ -287,16 +313,16 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     if (localPest) {
       return {
-        pestFound: true,
+        pestFound: !isLowConfidence,
         confidence: maxScore,
         pest: { ...localPest.details, name: cleanName, source: "IA Local" },
-        message: "Identificado via motor local.",
+        message: isLowConfidence ? "Confiança local baixa." : "Identificado via motor local.",
         source: 'IA Local'
       };
     }
 
     return {
-      pestFound: true,
+      pestFound: !isLowConfidence,
       confidence: maxScore,
       pest: {
         name: cleanName,
@@ -315,7 +341,7 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         healthRisks: "Variável",
         source: "IA Local (Genérico)"
       },
-      message: "Praga reconhecida, mas sem ficha técnica local completa.",
+      message: isLowConfidence ? "Confiança local baixa (Genérico)." : "Praga reconhecida, mas sem ficha técnica local completa.",
       source: 'IA Local'
     };
   } catch (error) {
@@ -383,7 +409,9 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
       
       let friendlyMsg = `[v2.7.2] Erro: ${errorMsg.substring(0, 50)}`;
       
-      if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
+      if (errorMsg.includes("Failed to fetch")) {
+        friendlyMsg = "[v2.7.2] Erro de Conexão: Não foi possível alcançar os servidores da IA. Verifique sua internet ou use o Modo Offline.";
+      } else if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
         friendlyMsg = "[v2.7.2] Limite de cota do Google atingido. A IA gratuita tem limites rígidos por minuto. Tente novamente em 60 segundos ou use o modo Offline.";
       } else if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE")) {
         friendlyMsg = "[v2.7.2] O servidor do Google está instável. Tente o modo Offline.";
