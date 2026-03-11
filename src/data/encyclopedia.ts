@@ -382,23 +382,23 @@ export const ENCYCLOPEDIA_DATA: EncyclopediaItem[] = [
     }
   },
   { 
-    id: '20', name: 'Mosca-verde', category: 'Moscas', icon: '🪰',
+    id: '20', name: 'Mosca-de-banheiro', category: 'Moscas', icon: '🪰',
     details: {
-      name: 'Mosca-verde', scientificName: 'Lucilia cuprina', category: 'Moscas', riskLevel: 'Moderado',
-      characteristics: ['Cor verde-metálica brilhante', 'Tamanho médio (10mm)'],
-      anatomy: 'Corpo robusto. Olhos avermelhados.',
+      name: 'Mosca-de-banheiro', scientificName: 'Psychoda spp.', category: 'Moscas', riskLevel: 'Baixo',
+      characteristics: ['Pequena e peluda', 'Parece uma mini mariposa', 'Voo curto e irregular'],
+      anatomy: 'Corpo e asas cobertos por pelos finos. Antenas longas.',
       members: '6 pernas.',
-      habits: 'Comum em carcaças e lixo. Atraída por feridas e odores fortes.',
-      reproduction: 'Deposita ovos em tecidos em decomposição ou feridas abertas.',
-      larvalPhase: 'Larvas necrófagas que podem causar miíases.',
-      controlMethods: ['Remoção de carcaças', 'Tratamento de feridas em animais', 'Iscas'],
-      physicalMeasures: ['Enterrar ou queimar restos animais', 'Limpeza de lixeiras', 'Uso de armadilhas'],
+      habits: 'Vive em ambientes úmidos como banheiros e cozinhas. Alimenta-se de matéria orgânica em ralos.',
+      reproduction: 'Ovos depositados na película orgânica (biofilme) de ralos e canos.',
+      larvalPhase: 'Larvas vivem no lodo dos ralos, alimentando-se de fungos e bactérias.',
+      controlMethods: ['Limpeza mecânica de ralos', 'Uso de água fervente', 'Eliminação de biofilme'],
+      physicalMeasures: ['Escovar o interior dos ralos', 'Manter ralos fechados quando não em uso', 'Secar áreas úmidas'],
       chemicalMeasures: [
-        'Deltametrina: 60ml/10L água (Pulverização de áreas de descarte)',
-        'Fentiom: 20ml/10L água (Tratamento residual externo)',
-        'Tiametoxam (Isca): Aplicação em pontos de pouso externos'
+        'Deltametrina: 30ml/10L água (Pulverização em áreas de pouso)',
+        'Hipoclorito de Sódio: Aplicação direta em ralos para remover biofilme',
+        'Lambda-cialotrina: 20ml/10L água (Tratamento residual de paredes úmidas)'
       ],
-      healthRisks: 'Causa miíases (bicheiras) em animais e humanos.'
+      healthRisks: 'Pode transportar bactérias de esgotos para superfícies limpas, mas não pica.'
     }
   },
   { 
