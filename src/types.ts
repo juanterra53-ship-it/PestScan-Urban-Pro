@@ -30,6 +30,7 @@ export interface RecognitionResult {
   message?: string;
   capturedImage?: string;
   sources?: GroundingSource[];
+  source?: 'IA Local' | 'Banco de Dados' | 'IA Online (Gemini)';
 }
 
 export interface HistoryEntry {
