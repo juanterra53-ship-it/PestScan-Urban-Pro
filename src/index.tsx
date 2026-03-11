@@ -108,16 +108,11 @@ const App: React.FC = () => {
       try {
         loadLocalModel().catch(e => console.warn("Modelo offline:", e));
         
-        // Splash screen delay
-        await new Promise(r => setTimeout(r, 2500));
-
-        if (!navigator.onLine) {
-          setUser({ id: 'offline', email: 'offline@local', name: 'Modo Offline' });
-          if (isMounted) setView('main');
-          return;
-        }
-
+        const splashPromise = new Promise(r => setTimeout(r, 2000));
+        
         const { data, error } = await supabase.auth.getSession();
+        await splashPromise;
+        
         if (!isMounted) return;
 
         if (error || !data.session?.user) {
@@ -132,8 +127,14 @@ const App: React.FC = () => {
         });
         fetchHistory();
         setView('main');
-      } catch (err) {
-        if (isMounted) setView('auth');
+      } catch (err: any) {
+        console.error("Init error:", err);
+        if (isMounted) {
+          if (err?.message?.includes("Failed to fetch")) {
+            setError("Erro de Conexão: Falha ao carregar dados iniciais. Verifique sua internet.");
+          }
+          setView('auth');
+        }
       }
     };
 
@@ -262,38 +263,52 @@ const App: React.FC = () => {
 
       let res: RecognitionResult;
 
-      // --- LÓGICA DE ECONOMIA DE API (CACHE HÍBRIDO) ---
-      // 1. Tenta identificar localmente primeiro
+      // --- MOTOR HÍBRIDO SÊNIOR ---
+      // 1. Identificação Local (TFLite)
       const localRes = await analyzeOffline(canvas);
-      
-      if (localRes.pestFound && localRes.confidence > 0.25 && localRes.pest) {
-        console.log("🔍 [Economia] Identificado localmente:", localRes.pest.name);
-        
-        // 2. Busca no banco se já temos uma ficha completa para esta praga
+      console.log("🧠 [Senior] Resultado Local:", localRes.pest?.name, localRes.confidence);
+
+      if (localRes.pestFound && localRes.confidence > 0.20 && localRes.pest) {
+        // 2. Busca no Banco de Dados por Referência
         const { data: existingData } = await supabase
           .from('pest_detections')
           .select('analysis_result')
-          .eq('pest_name', localRes.pest.name)
+          .ilike('pest_name', `%${localRes.pest.name}%`)
           .not('analysis_result', 'is', null)
-          .order('created_at', { ascending: false })
+          .order('confidence', { ascending: false })
           .limit(1);
 
         if (existingData && existingData.length > 0 && existingData[0].analysis_result.pestFound) {
-          console.log("💰 [Economia] Ficha técnica encontrada no banco! Economizando API.");
+          console.log("✅ [Senior] Referência encontrada no banco!");
           res = {
             ...existingData[0].analysis_result,
             confidence: localRes.confidence,
-            message: "Recuperado do banco de dados (Economia de API)",
+            message: `Identificado via Referência Local (${localRes.pest.name})`,
             source: 'Banco de Dados'
           };
         } else {
-          // 3. Se não tem no banco, chama a IA Online
-          console.log("🌐 [Economia] Ficha não encontrada no banco. Chamando IA Online...");
+          // 3. Se não tem no banco, usa IA Online para gerar ficha técnica completa
+          console.log("🌐 [Senior] Sem referência no banco. Consultando IA Online...");
           res = await analyzePestImage(base64, canvas);
         }
       } else {
-        // Se a IA local falhou ou confiança baixa, vai direto para a online
+        // 4. Fallback total para IA Online se o motor local falhar
+        console.log("🌐 [Senior] Motor local inconclusivo. Consultando IA Online...");
         res = await analyzePestImage(base64, canvas);
+      }
+
+      // 5. Fallback de Emergência (Offline Total ou Erro de Conexão)
+      const isConnectionError = res.message?.includes("Erro de Conexão") || res.message?.includes("Failed to fetch");
+      
+      if ((!res.pestFound || isConnectionError) && localRes.pestFound) {
+        console.log("🔄 [Senior] Fallback de Emergência para Motor Local devido a erro ou falta de resultado.");
+        res = {
+          ...localRes,
+          pestFound: true,
+          message: isConnectionError 
+            ? `Conexão instável. Usando IA Local: ${localRes.message}` 
+            : `Modo Emergência: ${localRes.message}`
+        };
       }
 
       const resultWithImage = { ...res, capturedImage: dataUrl };
@@ -578,9 +593,14 @@ const App: React.FC = () => {
 
   if (view === 'splash') return (
     <div className="h-screen bg-emerald-950 flex flex-col items-center justify-center text-white p-6 text-center">
-      <Bug className="w-24 h-24 text-emerald-400 animate-bounce mb-6" />
-      <h1 className="text-4xl font-black tracking-tighter">PestScan Pro</h1>
-      <p className="text-xs text-emerald-400/60 uppercase font-black tracking-[0.4em] mt-3">v2.7.2 Stable</p>
+      <div className="relative mb-8">
+        <div className="absolute inset-0 bg-emerald-400/20 blur-3xl rounded-full"></div>
+        <div className="relative bg-emerald-900/50 p-8 rounded-[3rem] border border-emerald-400/20 shadow-2xl">
+          <Bug className="w-20 h-20 text-emerald-400" />
+        </div>
+      </div>
+      <h1 className="text-5xl font-black tracking-tighter">PestScan<span className="text-emerald-400">Pro</span></h1>
+      <p className="text-xs text-emerald-400/60 uppercase font-black tracking-[0.4em] mt-4">Inteligência em Controle de Pragas</p>
       
       <div className="mt-16 flex flex-col items-center gap-3">
         <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-400' : 'bg-slate-600 animate-pulse'}`} />
@@ -593,8 +613,11 @@ const App: React.FC = () => {
 
   if (view === 'auth') return (
     <div className="min-h-screen bg-emerald-950 flex flex-col items-center justify-center p-8 pt-[calc(2rem+env(safe-area-inset-top))]">
-      <div className="bg-emerald-900/50 p-6 rounded-[2.5rem] mb-8 shadow-2xl">
-        <Bug className="w-16 h-16 text-emerald-400" />
+      <div className="relative mb-8">
+        <div className="absolute inset-0 bg-emerald-400/10 blur-2xl rounded-full"></div>
+        <div className="relative bg-emerald-900/50 p-6 rounded-[2.5rem] shadow-2xl border border-emerald-400/10">
+          <Bug className="w-16 h-16 text-emerald-400" />
+        </div>
       </div>
       <h1 className="text-3xl font-black text-white mb-2 uppercase tracking-tight">
         {authMode === 'login' ? 'Bem-vindo' : 'Novo Cadastro'}
@@ -612,14 +635,32 @@ const App: React.FC = () => {
         setLoading(true); setError(null);
         try { 
           if (authMode === 'login') {
-            const { error } = await supabase.auth.signInWithPassword({ email, password }); 
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password }); 
             if (error) throw error;
+            if (data.user) {
+              setUser({ 
+                id: data.user.id, 
+                email: data.user.email || '', 
+                name: data.user.email?.split('@')[0] || 'Usuário' 
+              });
+              setView('main');
+            }
           } else {
-            const { error } = await supabase.auth.signUp({ email, password }); 
+            const { data, error } = await supabase.auth.signUp({ email, password }); 
             if (error) throw error;
+            if (data.user) {
+              setError("Cadastro realizado! Verifique seu e-mail para confirmar.");
+            }
           }
         } catch (e: any) { 
-          setError(e.message); 
+          console.error("Auth error:", e);
+          let msg = e.message || e.error_description || (typeof e === 'string' ? e : "Erro de autenticação");
+          
+          if (msg.includes("Failed to fetch")) {
+            msg = "Erro de Conexão: Não foi possível alcançar o servidor. Verifique sua internet ou as configurações do Supabase.";
+          }
+          
+          setError(msg); 
         } finally { 
           setLoading(false); 
         } 
@@ -652,8 +693,9 @@ const App: React.FC = () => {
       <header className="bg-emerald-900 p-6 pt-[calc(3rem+env(safe-area-inset-top))] pb-12 rounded-b-[4rem] text-white sticky top-0 z-40 shadow-2xl border-b border-emerald-800/50">
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-4">
-            <div className="bg-emerald-400/20 p-3 rounded-2xl backdrop-blur-sm border border-emerald-400/30 shadow-inner">
-              <Bug className="text-emerald-400 w-8 h-8" />
+            <div className="bg-emerald-400/10 p-3 rounded-2xl backdrop-blur-md border border-emerald-400/20 shadow-lg relative group">
+              <div className="absolute inset-0 bg-emerald-400/5 blur-lg rounded-full group-hover:bg-emerald-400/10 transition-colors"></div>
+              <Bug className="text-emerald-400 w-8 h-8 relative z-10" />
             </div>
             <div>
               <h1 className="font-black text-2xl text-white tracking-tighter">PestScan Pro</h1>
@@ -670,7 +712,21 @@ const App: React.FC = () => {
           <div className="flex items-center gap-3">
             {user && (
               <button 
-                onClick={() => supabase.auth.signOut()} 
+                onClick={() => {
+                  try {
+                    // Logout instantâneo para o usuário
+                    setUser(null);
+                    setView('auth');
+                    
+                    if (user.id !== 'offline') {
+                      // Faz o logout no servidor em background sem travar a UI
+                      supabase.auth.signOut().catch((err: any) => console.error("Erro background logout:", err));
+                    }
+                  } catch (err: any) {
+                    setUser(null);
+                    setView('auth');
+                  }
+                }} 
                 className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl transition-colors border border-white/10"
                 title="Sair"
               >
@@ -757,11 +813,19 @@ const App: React.FC = () => {
 
         {view === 'camera' && (
           <div className="flex flex-col items-center animate-in fade-in zoom-in-95">
-             <div className="mb-6 flex items-center gap-3 px-5 py-2.5 bg-white/80 backdrop-blur-md rounded-2xl border border-slate-100 shadow-sm">
-                <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                  Motor Local: {modelStatus}
-                </span>
+             <div className="mb-6 flex flex-wrap justify-center gap-3">
+                <div className="flex items-center gap-3 px-5 py-2.5 bg-white/80 backdrop-blur-md rounded-2xl border border-slate-100 shadow-sm">
+                   <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                   <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                     Motor Local: {modelStatus}
+                   </span>
+                </div>
+                {!isOnline && (
+                  <div className="flex items-center gap-3 px-5 py-2.5 bg-red-500 text-white backdrop-blur-md rounded-2xl shadow-sm animate-pulse">
+                     <WifiOff size={14} />
+                     <span className="text-[10px] font-black uppercase tracking-widest">Offline</span>
+                  </div>
+                )}
              </div>
 
              <div className="w-full aspect-[3/4] bg-slate-900 rounded-[4rem] overflow-hidden border-8 border-white shadow-2xl relative">
@@ -874,7 +938,7 @@ const App: React.FC = () => {
                           <p className="text-red-800 font-black text-[10px] uppercase tracking-widest mb-2">Status do Sistema</p>
                           <p className="text-red-700 text-xs leading-relaxed font-bold">{currentResult.message}</p>
                           
-                          {isOnline && isModelReady && (
+                          {isModelReady && (
                             <button
                               onClick={async () => {
                                 const img = new Image();
@@ -886,9 +950,19 @@ const App: React.FC = () => {
                                   setCurrentResult({ ...result, capturedImage: currentResult.capturedImage });
                                 } finally { setLoading(false); }
                               }}
-                              className="mt-6 w-full py-4 bg-white border-2 border-red-200 text-red-700 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-red-50 transition-all active:scale-95 shadow-sm"
+                              className="mt-6 w-full py-4 bg-white border-2 border-emerald-200 text-emerald-700 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-50 transition-all active:scale-95 shadow-sm"
                             >
                               Forçar Identificação Local
+                            </button>
+                          )}
+                          {!isModelReady && (
+                            <button
+                              onClick={() => {
+                                window.location.reload();
+                              }}
+                              className="mt-6 w-full py-4 bg-white border-2 border-slate-200 text-slate-700 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
+                            >
+                              Recarregar Aplicativo
                             </button>
                           )}
                         </div>
@@ -912,33 +986,19 @@ const App: React.FC = () => {
         )}
       </main>
 
-      <nav className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur-2xl border-t border-slate-100 px-12 pt-5 pb-12 flex justify-around items-center z-50 rounded-t-[4rem] shadow-[0_-20px_50px_-15px_rgba(0,0,0,0.08)]">
-        <button onClick={() => { setView('main'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all ${view === 'main' || view === 'detail' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
-          <BookOpen size={26} />
+      <nav className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur-2xl border-t border-slate-100 px-10 pt-5 pb-10 flex justify-between items-center z-50 rounded-t-[3.5rem] shadow-[0_-20px_50px_-15px_rgba(0,0,0,0.08)]">
+        <button onClick={() => { setView('main'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all w-20 ${view === 'main' || view === 'detail' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
+          <BookOpen size={24} />
           <span className="text-[9px] font-black uppercase tracking-widest">Guia</span>
         </button>
         
-        <button onClick={handleCapture} className="w-20 h-20 -mt-24 bg-emerald-600 rounded-full flex items-center justify-center border-[8px] border-slate-50 shadow-2xl active:scale-90 transition-all text-white group">
-          <Camera size={32} className="group-hover:scale-110 transition-transform" />
+        <button onClick={handleCapture} className="w-20 h-20 -mt-20 bg-emerald-600 rounded-full flex items-center justify-center border-[6px] border-white shadow-2xl active:scale-90 transition-all text-white group">
+          <Camera size={30} className="group-hover:scale-110 transition-transform" />
         </button>
         
-        <button onClick={() => { setView('history'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all ${view === 'history' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
-          <History size={26} />
+        <button onClick={() => { setView('history'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all w-20 ${view === 'history' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
+          <History size={24} />
           <span className="text-[9px] font-black uppercase tracking-widest">Scans</span>
-        </button>
-
-        <button 
-          onClick={() => {
-            if(confirm("Deseja redefinir o aplicativo? Isso limpará o cache local e configurações.")) {
-              localStorage.clear();
-              window.location.reload();
-            }
-          }}
-          className="flex flex-col items-center gap-1.5 transition-all text-slate-300 hover:text-red-400"
-          title="Redefinir App"
-        >
-          <RefreshCw size={26} />
-          <span className="text-[9px] font-black uppercase tracking-widest">Reset</span>
         </button>
       </nav>
 
@@ -963,7 +1023,7 @@ const App: React.FC = () => {
       )}
 
       <div className="fixed bottom-3 right-6 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em] pointer-events-none z-[60] opacity-50">
-        v2.7.2 Stable
+        v2.7.3 Stable
       </div>
     </div>
   );
@@ -971,6 +1031,12 @@ const App: React.FC = () => {
 
 const container = document.getElementById('root');
 if (container) {
-  const root = createRoot(container);
-  root.render(<App />);
+  // Evita o aviso de "createRoot() on a container that has already been passed to createRoot()"
+  // @ts-ignore
+  if (!window.__reactRoot) {
+    // @ts-ignore
+    window.__reactRoot = createRoot(container);
+  }
+  // @ts-ignore
+  window.__reactRoot.render(<App />);
 }
