@@ -4,6 +4,15 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim() || 'https://nvkufyoakhnsnvkqvhow.supabase.co';
 const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim() || 'sb_publishable_4LSh4M3KWAVKl0PBuqZtlw_lCuJQeJ8';
 
+// Diagnóstico de configuração
+if (supabaseAnonKey.startsWith('sb_') || supabaseAnonKey.startsWith('pk_')) {
+  console.warn("⚠️ ALERTA DE CONFIGURAÇÃO: A chave VITE_SUPABASE_ANON_KEY parece ser uma chave do Stripe (começa com sb_ ou pk_), não do Supabase. O login irá falhar. Verifique as variáveis de ambiente no menu Settings.");
+}
+
+if (!supabaseUrl.includes('supabase.co')) {
+  console.warn("⚠️ ALERTA DE CONFIGURAÇÃO: A URL do Supabase parece estar incorreta. Verifique as variáveis de ambiente.");
+}
+
 let client;
 try {
   client = createClient(supabaseUrl, supabaseAnonKey);
