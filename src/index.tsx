@@ -755,14 +755,6 @@ const App: React.FC = () => {
               <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
               <p className="text-xs leading-relaxed font-bold flex-1">{error}</p>
             </div>
-            <div className="flex flex-col gap-2">
-              <button 
-                onClick={() => { setError(null); if(view === 'camera') initCamera(); }} 
-                className="w-full py-3 bg-emerald-600 text-white rounded-2xl font-black text-[10px] uppercase active:scale-95 transition-all flex items-center justify-center gap-2"
-              >
-                <RefreshCw size={14} /> Tentar Novamente
-              </button>
-            </div>
           </div>
         )}
         
@@ -773,13 +765,10 @@ const App: React.FC = () => {
               <input 
                 type="text" 
                 placeholder="Pesquisar praga ou caruncho..." 
-                className="w-full h-16 bg-white border border-slate-100 rounded-[2rem] pl-14 pr-14 text-sm font-medium outline-none shadow-sm focus:ring-4 focus:ring-emerald-500/10 transition-all" 
+                className="w-full h-16 bg-white border border-slate-100 rounded-[2rem] pl-14 pr-6 text-sm font-medium outline-none shadow-sm focus:ring-4 focus:ring-emerald-500/10 transition-all" 
                 value={searchTerm} 
                 onChange={e => setSearchTerm(e.target.value)} 
               />
-              {searchTerm && (
-                 <button onClick={() => setSearchTerm('')} className="absolute right-6 top-1/2 -translate-y-1/2 text-slate-300 p-1 hover:text-slate-500"><X size={18} /></button>
-              )}
             </div>
 
             {searchTerm.trim() !== '' && ENCYCLOPEDIA_DATA.filter(p => normalizeString(p.name).includes(normalizeString(searchTerm))).length === 0 && (
@@ -959,14 +948,9 @@ const App: React.FC = () => {
                             </button>
                           )}
                           {!isModelReady && (
-                            <button
-                              onClick={() => {
-                                window.location.reload();
-                              }}
-                              className="mt-6 w-full py-4 bg-white border-2 border-slate-200 text-slate-700 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
-                            >
-                              Recarregar Aplicativo
-                            </button>
+                            <div className="mt-6 p-4 bg-slate-50 rounded-2xl text-center">
+                              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Aguarde a sincronização do motor local</p>
+                            </div>
                           )}
                         </div>
                       </div>
