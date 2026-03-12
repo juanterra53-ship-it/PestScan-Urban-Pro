@@ -18,7 +18,7 @@ const normalizeString = (str: string) =>
      .trim();
 
 if (typeof tflite !== 'undefined' && tflite.setWasmPath) {
-  tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
+  tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/');
 }
 
 const getApiKey = (): string => {
@@ -190,15 +190,28 @@ export const loadLocalModel = async () => {
     const fallbackModelUrl = `/model/modelo_barata.tflite`;
     
     try {
-      if (tflite.setWasmPath) {
-        tflite.setWasmPath('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/');
+      // Tenta carregar o WASM localmente primeiro (se os arquivos existirem em /lib/)
+      // Se falhar, o tflite tentará o fallback automático ou o CDN
+      try {
+        if (tflite.setWasmPath) {
+          const wasmPath = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/';
+          console.log(`📂 Configurando path do WASM para: ${wasmPath}`);
+          tflite.setWasmPath(wasmPath);
+          // Pequeno delay para garantir que o path seja processado
+          await new Promise(r => setTimeout(r, 500));
+        }
+      } catch (e) {
+        console.warn("⚠️ Falha ao configurar path do WASM.");
       }
       
       console.log(`📡 Tentando carregar Modelo Universal de: ${universalModelUrl}`);
       
       const tryLoad = async (url: string) => {
-        const loadPromise = tflite.loadTFLiteModel(url);
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 20000));
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Falha ao carregar modelo: ${response.statusText}`);
+        const buffer = await response.arrayBuffer();
+        const loadPromise = tflite.loadTFLiteModel(buffer);
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 30000));
         return await Promise.race([loadPromise, timeoutPromise]);
       };
 
@@ -425,8 +438,10 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
       
       let friendlyMsg = `[v2.7.2] Erro: ${errorMsg.substring(0, 50)}`;
       
-      if (errorMsg.includes("Failed to fetch")) {
-        friendlyMsg = "[v2.7.3] Erro de Conexão: Não foi possível alcançar os servidores da IA. Verifique sua internet (3G instável?) ou use o Modo Offline.";
+      if (errorMsg.includes("Failed to fetch") || errorMsg.includes("TIMEOUT_EXCEEDED")) {
+        console.warn("⚠️ Falha de conexão detectada. Tentando IA Local (Offline)...");
+        if (elementToUse) return await analyzeOffline(elementToUse);
+        friendlyMsg = "[v2.7.3] Erro de Conexão: Não foi possível alcançar os servidores da IA. Verifique sua internet ou use o Modo Offline.";
       } else if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
         friendlyMsg = "[v2.7.2] Limite de cota do Google atingido. A IA gratuita tem limites rígidos por minuto. Tente novamente em 60 segundos ou use o modo Offline.";
       } else if (errorMsg.includes("503") || errorMsg.includes("UNAVAILABLE")) {
