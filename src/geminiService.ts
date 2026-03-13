@@ -140,23 +140,23 @@ export const isLocalModelLoaded = () => !!localModel;
 // Lista exata baseada no treinamento do Google Colab (Ordem Alfabética do TensorFlow)
 // Importante: Manter os erros de digitação do treino para o mapeamento de índices funcionar
 export const MODEL_LABELS = [
-  'Aranha armadeira',             // 0
-  'Aranha Marron',                // 1
-  'Barata germanica',             // 2
-  'Barata Oriental',              // 3
-  'Barata Periplaneta Americana', // 4
-  'Besouro vermelho da farinha',  // 5
+  'Aranha Marrom',                // 0
+  'Aranha Armadeira',             // 1
+  'Barata Alemã',                 // 2
+  'Barata Americana',             // 3
+  'Barata Oriental',              // 4
+  'Besouro Vermelho da Farinha',  // 5
   'Broca do Trigo',               // 6
-  'Escorpião Amarelo',            // 7
-  'Escorpião Amarelo do Nordeste',// 8
-  'Escorpíão Marrom',             // 9
+  'Mosca de Banheiro',            // 7
+  'Mosca Doméstica',              // 8
+  'Mosca Varejeira',              // 9
   'Formiga Carpinteira',          // 10
   'Formiga Fantasma',             // 11
-  'Formiga lava pés',             // 12
-  'Gorgulho do Arroz',            // 13
-  'Mosca de Banheiro',            // 14
-  'Mosca Domestica',              // 15
-  'Mosca Varejeira',              // 16
+  'Formiga Lava-pés',             // 12
+  'Escorpião Amarelo',            // 13
+  'Escorpião Amarelo do Nordeste',// 14
+  'Escorpião Marrom',             // 15
+  'Gorgulho do Arroz',            // 16
   'Ratazana',                     // 17
   'Rato Camundongo',              // 18
   'Rato Preto'                    // 19
@@ -164,12 +164,28 @@ export const MODEL_LABELS = [
 
 // Mapeamento para nomes bonitos na interface (Corrige os erros de digitação do treino)
 const LABEL_MAP: Record<string, string> = {
-  'Aranha Marron': 'Aranha Marrom',
-  'Aranha armadeira': 'Aranha Armadeira',
-  'Barata germanica': 'Barata Germânica',
-  'Escorpíão Marrom': 'Escorpião Marrom',
-  'Formiga lava pés': 'Formiga Lava-pés',
-  'Mosca Domestica': 'Mosca Doméstica'
+  'Aranha Marron': 'Aranha-marrom',
+  'Aranha Marrom': 'Aranha-marrom',
+  'Aranha Armadeira': 'Aranha-armadeira',
+  'Barata germanica': 'Barata-alemã',
+  'Barata Alemã': 'Barata-alemã',
+  'Barata Americana': 'Barata-americana',
+  'Barata Oriental': 'Barata-oriental',
+  'Escorpíão Marrom': 'Escorpião-marrom',
+  'Escorpião Marrom': 'Escorpião-marrom',
+  'Escorpião Amarelo': 'Escorpião-amarelo',
+  'Escorpião Amarelo do Nordeste': 'Escorpião-amarelo-do-nordeste',
+  'Formiga lava pés': 'Formiga-lava-pés',
+  'Formiga Lava-pés': 'Formiga-lava-pés',
+  'Formiga Fantasma': 'Formiga-fantasma',
+  'Formiga Carpinteira': 'Formiga-carpinteira',
+  'Mosca Domestica': 'Mosca-doméstica',
+  'Mosca Doméstica': 'Mosca-doméstica',
+  'Mosca de Banheiro': 'Mosca-de-banheiro',
+  'Mosca Varejeira': 'Mosca-varejeira',
+  'Gorgulho do Arroz': 'Gorgulho-do-arroz',
+  'Rato Camundongo': 'Camundongo',
+  'Rato Preto': 'Rato-de-telhado'
 };
 
 const getCleanName = (label: string) => LABEL_MAP[label] || label;
@@ -185,71 +201,73 @@ export const loadLocalModel = async () => {
   
   try {
     await tf.ready();
-    // Removemos o timestamp para permitir que o navegador use o cache offline
+    // Pequeno delay para estabilidade do TFJS
+    await new Promise(r => setTimeout(r, 500));
+
+    // Configuração explícita do WASM para a versão alpha.9
+    if (typeof tflite !== 'undefined' && tflite.setWasmPath) {
+      const wasmPath = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.9/dist/';
+      console.log(`📂 Configurando motor WASM: ${wasmPath}`);
+      tflite.setWasmPath(wasmPath);
+      // Delay essencial para o motor carregar o binário WASM
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
     const universalModelUrl = `/model/modelo_universal.tflite`;
     const fallbackModelUrl = `/model/modelo_barata.tflite`;
     
     try {
-      // Tenta carregar o WASM localmente primeiro (se os arquivos existirem em /lib/)
-      // Se falhar, o tflite tentará o fallback automático ou o CDN
-      try {
-        if (tflite.setWasmPath) {
-          const wasmPath = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/';
-          console.log(`📂 Configurando path do WASM para: ${wasmPath}`);
-          tflite.setWasmPath(wasmPath);
-          // Pequeno delay para garantir que o path seja processado
-          await new Promise(r => setTimeout(r, 500));
-        }
-      } catch (e) {
-        console.warn("⚠️ Falha ao configurar path do WASM.");
-      }
-      
-      console.log(`📡 Tentando carregar Modelo Universal de: ${universalModelUrl}`);
-      
       const tryLoad = async (url: string) => {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`Falha ao carregar modelo: ${response.statusText}`);
+        const response = await fetch(url, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        
         const buffer = await response.arrayBuffer();
+        console.log("🧠 Inicializando motor TFLite...");
+        
         const loadPromise = tflite.loadTFLiteModel(buffer);
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 30000));
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("Timeout na inicialização da IA")), 45000)
+        );
+        
         return await Promise.race([loadPromise, timeoutPromise]);
       };
 
       try {
         localModel = await tryLoad(universalModelUrl);
-        modelStatus = "Ativo (Universal)";
+        modelStatus = "IA Local: Ativa";
         console.log("✅ Modelo Universal carregado!");
         return;
-      } catch (e) {
-        console.warn("⚠️ Modelo Universal falhou, tentando fallback...");
+      } catch (e: any) {
+        if (e.message?.includes('_malloc')) {
+          console.warn("⚠️ Erro de memória, tentando novamente...");
+          await new Promise(r => setTimeout(r, 2000));
+          localModel = await tryLoad(universalModelUrl);
+          modelStatus = "IA Local: Ativa";
+          return;
+        }
+        
+        console.warn("⚠️ Falha no modelo principal, tentando fallback...", e);
         try {
           localModel = await tryLoad(fallbackModelUrl);
-          modelStatus = "Ativo (Local)";
+          modelStatus = "IA Local: Ativa (Modo Seguro)";
         } catch (e2) {
           console.error("❌ Todos os modelos TFLite falharam:", e2);
           throw e2;
         }
       }
-      return;
-    } catch (e: any) {
-      console.error("❌ Erro ao carregar modelos TFLite:", e);
-      modelStatus = `Erro: ${e.message || 'Falha no carregamento'}`;
+    } catch (innerError) {
+      console.error("Erro no carregamento TFLite:", innerError);
+      throw innerError;
     }
-
-    try {
-      localModel = await tf.loadGraphModel('/model/model.json');
-      modelStatus = "Ativo (TFJS)";
-    } catch (e) {
-      modelStatus = "Erro: Sem Modelo";
-    }
-  } catch (error) {
-    modelStatus = "Erro de Inicialização";
+  } catch (error: any) {
+    console.error("❌ Erro de Inicialização da IA:", error);
+    modelStatus = `Erro: ${error.message || 'Falha na Inicialização'}`;
   } finally {
     isModelLoading = false;
   }
 };
 
-export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
+export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvasElement, normMode: number = 2): Promise<RecognitionResult> => {
   if (typeof tf === 'undefined' || !localModel) {
     return { 
       pestFound: false, 
@@ -261,79 +279,91 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
   try {
     const tensor = tf.tidy(() => {
       const img = tf.browser.fromPixels(imageElement);
-      // Normalização padrão Teachable Machine: (x / 127.5) - 1
-      return img.resizeBilinear([224, 224])
-        .toFloat()
-        .sub(tf.scalar(127.5))
-        .div(tf.scalar(127.5))
-        .expandDims();
+      const resized = tf.image.resizeBilinear(img, [224, 224], true);
+      
+      if (normMode === 1) {
+        // Modo 1: [0, 1] (Padrão TFLite/Python)
+        return resized.toFloat().div(tf.scalar(255)).expandDims();
+      } else if (normMode === 2) {
+        // Modo 2: [0, 255] (Raw)
+        return resized.toFloat().expandDims();
+      } else {
+        // Modo 0: [-1, 1] (Padrão Teachable Machine)
+        return resized.toFloat().sub(tf.scalar(127.5)).div(tf.scalar(127.5)).expandDims();
+      }
     });
 
     let predictions = localModel.predict ? localModel.predict(tensor) : localModel.execute(tensor);
     let outputTensor = predictions;
     
-    // Se for um objeto (comum em modelos mult-output), pega o primeiro tensor
+    // Suporte para múltiplos outputs (pega o que tem o shape de classificação)
     if (predictions && typeof predictions === 'object' && !predictions.data) {
       const keys = Object.keys(predictions);
-      outputTensor = predictions[keys[0]];
-      console.log(`📦 Usando output tensor: ${keys[0]}`);
+      // Procura por um tensor que tenha o tamanho das nossas labels (20 ou 21)
+      const bestKey = keys.find(k => {
+        const shape = predictions[k].shape;
+        const size = shape[shape.length - 1];
+        return size === 20 || size === 21 || size === MODEL_LABELS.length || size === MODEL_LABELS.length + 1;
+      }) || keys[0];
+      
+      outputTensor = predictions[bestKey];
+      console.log(`📦 Usando output tensor: ${bestKey} (Shape: ${outputTensor.shape})`);
     }
 
     const scores = await outputTensor.data();
     const scoresArray = Array.from(scores) as number[];
     
-    console.log("-----------------------------------");
-    console.log(`📊 Shape do Output: ${outputTensor.shape}`);
-    console.log(`📊 Tamanho do Array: ${scoresArray.length}`);
-    
-    // Mostra os valores brutos dos primeiros 5 índices para debug
-    console.log(`🔢 Primeiros 5 scores: ${scoresArray.slice(0, 5).map(s => s.toFixed(4)).join(', ')}`);
-    
-    const topIndices = scoresArray
-      .map((score, index) => ({ score, index }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3);
-
-    console.log("🏆 Top 3 Predições Locais:");
-    topIndices.forEach((item, i) => {
-      // Tenta mapear o índice. Se for 21 classes, Background costuma ser a última (20) ou a primeira (0)
-      let label = `Classe ${item.index}`;
-      if (scoresArray.length === 21) {
-        if (item.index === 0) label = "Background (Fundo)";
-        else if (item.index === 20) label = "Background (Fundo)";
-        else label = MODEL_LABELS[item.index] || MODEL_LABELS[item.index - 1] || `Classe ${item.index}`;
-      } else {
-        label = MODEL_LABELS[item.index] || `Classe ${item.index}`;
-      }
-      console.log(`${i+1}. ${label}: ${(item.score * 100).toFixed(2)}% (Index: ${item.index})`);
-    });
-    console.log("-----------------------------------");
-    
-    // Lógica de mapeamento de labels
+    // Lógica de mapeamento de labels otimizada
     let labelsToUse = MODEL_LABELS;
     if (scoresArray.length === 21) {
-      // Testes indicam que o Background em modelos Teachable Machine/Google Colab 
-      // costuma ser a PRIMEIRA classe (índice 0) quando exportado via script padrão.
-      // Vamos tentar o mapeamento com Background no início novamente, mas com log extra.
+      // Background no INÍCIO (Índice 0) é o padrão mais comum em exportações do Colab/TM
       labelsToUse = ['Background', ...MODEL_LABELS];
+      console.log("🏷️ Mapeamento: Background no início + 20 Pragas");
     } else if (scoresArray.length === 20) {
       labelsToUse = MODEL_LABELS;
+      console.log("🏷️ Mapeamento: 20 Pragas (Sem Background)");
     } else {
-      console.warn(`⚠️ Tamanho do output (${scoresArray.length}) inesperado.`);
       labelsToUse = Array.from({ length: scoresArray.length }, (_, i) => MODEL_LABELS[i] || `Classe ${i}`);
     }
 
     const maxScore = Math.max(...scoresArray);
     const maxScoreIndex = scoresArray.indexOf(maxScore);
+    const confidencePct = (maxScore * 100).toFixed(1);
+
+    const top5 = scoresArray
+      .map((s, i) => ({ s, i }))
+      .sort((a, b) => b.s - a.s)
+      .slice(0, 5)
+      .map(item => ({
+        label: labelsToUse[item.i] || `Classe ${item.i}`,
+        confidence: item.s,
+        index: item.i
+      }));
+    
+    console.log("-----------------------------------");
+    console.log(`📊 Max Score: ${confidencePct}% no Index: ${maxScoreIndex} [Modo: ${normMode}]`);
+    top5.forEach((item, i) => {
+      console.log(`${i+1}. ${item.label}: ${(item.confidence * 100).toFixed(2)}% (Idx: ${item.index})`);
+    });
+    console.log("-----------------------------------");
 
     tensor.dispose();
-    if (outputTensor?.dispose) outputTensor.dispose();
+    if (outputTensor?.dispose && outputTensor !== predictions) outputTensor.dispose();
+    if (predictions?.dispose) predictions.dispose();
 
     const predictedLabel = labelsToUse[maxScoreIndex] || "Praga Detectada";
-    const isLowConfidence = maxScore < 0.25;
     
-    if (predictedLabel === 'Background') {
-      return { pestFound: false, confidence: maxScore, message: "Nenhuma praga identificada com clareza.", source: 'IA Local' };
+    // Se a confiança for muito baixa ou for Background, não considera como praga
+    if (predictedLabel === 'Background' || maxScore < 0.10) {
+      return { 
+        pestFound: false, 
+        confidence: maxScore, 
+        message: maxScore < 0.10 ? `Confiança insuficiente (${confidencePct}%).` : "Nenhuma praga detectada (Fundo).", 
+        source: 'IA Local',
+        maxScoreIndex,
+        topResults: top5,
+        normalizationMode: normMode
+      };
     }
 
     const cleanName = getCleanName(predictedLabel);
@@ -342,16 +372,19 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     if (localPest) {
       return {
-        pestFound: !isLowConfidence,
+        pestFound: true,
         confidence: maxScore,
-        pest: { ...localPest.details, name: cleanName, source: "IA Local" },
-        message: isLowConfidence ? "Confiança local baixa." : "Identificado via motor local.",
-        source: 'IA Local'
+        pest: { ...localPest.details, name: cleanName, source: "IA Local", maxScoreIndex } as any,
+        message: `IA Local: ${cleanName} (${confidencePct}%) [Idx: ${maxScoreIndex}]`,
+        source: 'IA Local',
+        maxScoreIndex,
+        topResults: top5,
+        normalizationMode: normMode
       };
     }
 
     return {
-      pestFound: !isLowConfidence,
+      pestFound: true,
       confidence: maxScore,
       pest: {
         name: cleanName,
@@ -368,17 +401,21 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
         physicalMeasures: ["Limpeza do local"],
         chemicalMeasures: ["Uso de inseticidas"],
         healthRisks: "Variável",
-        source: "IA Local (Genérico)"
-      },
-      message: isLowConfidence ? "Confiança local baixa (Genérico)." : "Praga reconhecida, mas sem ficha técnica local completa.",
-      source: 'IA Local'
+        source: "IA Local (Genérico)",
+        maxScoreIndex
+      } as any,
+      message: `IA Local: ${cleanName} (${confidencePct}%) [Idx: ${maxScoreIndex}]`,
+      source: 'IA Local',
+      maxScoreIndex,
+      topResults: top5,
+      normalizationMode: normMode
     };
   } catch (error) {
     return { pestFound: false, confidence: 0, message: "Erro offline." };
   }
 };
 
-export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLImageElement | HTMLCanvasElement): Promise<RecognitionResult> => {
+export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLImageElement | HTMLCanvasElement, normMode: number = 0): Promise<RecognitionResult> => {
   const base64 = await resizeImage(base64Raw, 512);
   let elementToUse = imageElement;
   
@@ -440,7 +477,7 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
       
       if (errorMsg.includes("Failed to fetch") || errorMsg.includes("TIMEOUT_EXCEEDED")) {
         console.warn("⚠️ Falha de conexão detectada. Tentando IA Local (Offline)...");
-        if (elementToUse) return await analyzeOffline(elementToUse);
+        if (elementToUse) return await analyzeOffline(elementToUse, normMode);
         friendlyMsg = "[v2.7.3] Erro de Conexão: Não foi possível alcançar os servidores da IA. Verifique sua internet ou use o Modo Offline.";
       } else if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
         friendlyMsg = "[v2.7.2] Limite de cota do Google atingido. A IA gratuita tem limites rígidos por minuto. Tente novamente em 60 segundos ou use o modo Offline.";
@@ -454,7 +491,7 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
     }
   }
 
-  if (elementToUse) return await analyzeOffline(elementToUse);
+  if (elementToUse) return await analyzeOffline(elementToUse, normMode);
   return { pestFound: false, confidence: 0, message: "Sem conexão com a internet." };
 };
 
