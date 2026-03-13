@@ -142,21 +142,21 @@ export const isLocalModelLoaded = () => !!localModel;
 export const MODEL_LABELS = [
   'Aranha Marrom',                // 0
   'Aranha Armadeira',             // 1
-  'Barata Alemã',                 // 2
+  'Barata Oriental',              // 2
   'Barata Americana',             // 3
-  'Barata Oriental',              // 4
+  'Barata Alemã',                 // 4
   'Besouro Vermelho da Farinha',  // 5
   'Broca do Trigo',               // 6
-  'Mosca de Banheiro',            // 7
-  'Mosca Doméstica',              // 8
-  'Mosca Varejeira',              // 9
+  'Gorgulho do Arroz',            // 7
+  'Escorpião Amarelo do Nordeste',// 8
+  'Escorpião Marrom',             // 9
   'Formiga Carpinteira',          // 10
   'Formiga Fantasma',             // 11
   'Formiga Lava-pés',             // 12
-  'Escorpião Amarelo',            // 13
-  'Escorpião Amarelo do Nordeste',// 14
-  'Escorpião Marrom',             // 15
-  'Gorgulho do Arroz',            // 16
+  'Mosca de Banheiro',            // 13
+  'Mosca Doméstica',              // 14
+  'Mosca Varejeira',              // 15
+  'Escorpião Amarelo',            // 16
   'Ratazana',                     // 17
   'Rato Camundongo',              // 18
   'Rato Preto'                    // 19
@@ -164,28 +164,24 @@ export const MODEL_LABELS = [
 
 // Mapeamento para nomes bonitos na interface (Corrige os erros de digitação do treino)
 const LABEL_MAP: Record<string, string> = {
-  'Aranha Marron': 'Aranha-marrom',
   'Aranha Marrom': 'Aranha-marrom',
   'Aranha Armadeira': 'Aranha-armadeira',
-  'Barata germanica': 'Barata-alemã',
   'Barata Alemã': 'Barata-alemã',
   'Barata Americana': 'Barata-americana',
   'Barata Oriental': 'Barata-oriental',
-  'Escorpíão Marrom': 'Escorpião-marrom',
   'Escorpião Marrom': 'Escorpião-marrom',
   'Escorpião Amarelo': 'Escorpião-amarelo',
   'Escorpião Amarelo do Nordeste': 'Escorpião-amarelo-do-nordeste',
-  'Formiga lava pés': 'Formiga-lava-pés',
   'Formiga Lava-pés': 'Formiga-lava-pés',
   'Formiga Fantasma': 'Formiga-fantasma',
   'Formiga Carpinteira': 'Formiga-carpinteira',
-  'Mosca Domestica': 'Mosca-doméstica',
   'Mosca Doméstica': 'Mosca-doméstica',
   'Mosca de Banheiro': 'Mosca-de-banheiro',
   'Mosca Varejeira': 'Mosca-varejeira',
   'Gorgulho do Arroz': 'Gorgulho-do-arroz',
   'Rato Camundongo': 'Camundongo',
-  'Rato Preto': 'Rato-de-telhado'
+  'Rato Preto': 'Rato-de-telhado',
+  'Ratazana': 'Ratazana'
 };
 
 const getCleanName = (label: string) => LABEL_MAP[label] || label;
