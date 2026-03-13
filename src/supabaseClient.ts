@@ -1,12 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Prioriza variáveis de ambiente do sistema (Vercel/Vite)
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim() || 'https://nvkufyoakhnsnvkqvhow.supabase.co';
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim() || 'sb_publishable_4LSh4M3KWAVKl0PBuqZtlw_lCuJQeJ8';
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
 
 // Diagnóstico de configuração
-if (supabaseAnonKey.startsWith('sb_') || supabaseAnonKey.startsWith('pk_')) {
-  console.warn("⚠️ ALERTA DE CONFIGURAÇÃO: A chave VITE_SUPABASE_ANON_KEY parece ser uma chave do Stripe (começa com sb_ ou pk_), não do Supabase. O login irá falhar. Verifique as variáveis de ambiente no menu Settings.");
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn("⚠️ CONFIGURAÇÃO AUSENTE: As variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY não foram encontradas. O login online não funcionará até que você as configure no menu Settings.");
+}
+
+if (supabaseAnonKey && (supabaseAnonKey.startsWith('sb_') || supabaseAnonKey.startsWith('pk_'))) {
+  console.error("❌ ERRO CRÍTICO: A chave VITE_SUPABASE_ANON_KEY configurada é uma chave do STRIPE, não do Supabase. O login IRÁ FALHAR. Por favor, obtenha a 'anon public key' no painel do Supabase.");
 }
 
 if (!supabaseUrl.includes('supabase.co')) {
