@@ -31,6 +31,8 @@ export interface RecognitionResult {
   capturedImage?: string;
   sources?: GroundingSource[];
   source?: 'IA Local' | 'Banco de Dados' | 'IA Online (Gemini)';
+  maxScoreIndex?: number;
+  topResults?: { label: string; confidence: number; index: number }[];
 }
 
 export interface HistoryEntry {
