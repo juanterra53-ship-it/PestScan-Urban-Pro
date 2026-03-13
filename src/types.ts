@@ -33,6 +33,7 @@ export interface RecognitionResult {
   source?: 'IA Local' | 'Banco de Dados' | 'IA Online (Gemini)';
   maxScoreIndex?: number;
   topResults?: { label: string; confidence: number; index: number }[];
+  normalizationMode?: number;
 }
 
 export interface HistoryEntry {
