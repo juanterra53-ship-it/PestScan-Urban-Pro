@@ -57,6 +57,7 @@ const App: React.FC = () => {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isModelReady, setIsModelReady] = useState(isLocalModelLoaded());
   const [modelStatus, setModelStatus] = useState(getModelStatus());
+  const [normMode, setNormMode] = useState(2);
 
   // Monitoramento do modelo local
   useEffect(() => {
@@ -263,10 +264,26 @@ const App: React.FC = () => {
 
       let res: RecognitionResult;
 
-      // --- MOTOR HÍBRIDO SÊNIOR ---
-      // 1. Identificação Local (TFLite)
-      const localRes = await analyzeOffline(canvas);
-      console.log("🧠 [Senior] Resultado Local:", localRes.pest?.name, localRes.confidence);
+      // --- MOTOR HÍBRIDO SÊNIOR COM AUTO-CALIBRAÇÃO ---
+      // Testamos os 3 modos e pegamos o melhor resultado
+      const results = await Promise.all([
+        analyzeOffline(canvas, 0),
+        analyzeOffline(canvas, 1),
+        analyzeOffline(canvas, 2)
+      ]);
+      
+      // Ordena por confiança. Em caso de empate, prioriza o Modo 2 (mais estável para aranhas)
+      const localRes = results.sort((a, b) => {
+        if (Math.abs(b.confidence - a.confidence) < 0.01) {
+          if (b.normalizationMode === 2) return 1;
+          if (a.normalizationMode === 2) return -1;
+        }
+        return b.confidence - a.confidence;
+      })[0];
+      
+      setNormMode(localRes.normalizationMode || 0);
+      
+      console.log(`🧠 [Auto-Calibração] Melhor Modo: ${localRes.normalizationMode} Confiança: ${localRes.confidence}`);
 
       if (localRes.pestFound && localRes.confidence > 0.20 && localRes.pest) {
         // 2. Busca no Banco de Dados por Referência
@@ -289,12 +306,12 @@ const App: React.FC = () => {
         } else {
           // 3. Se não tem no banco, usa IA Online para gerar ficha técnica completa
           console.log("🌐 [Senior] Sem referência no banco. Consultando IA Online...");
-          res = await analyzePestImage(base64, canvas);
+          res = await analyzePestImage(base64, canvas, normMode);
         }
       } else {
         // 4. Fallback total para IA Online se o motor local falhar
         console.log("🌐 [Senior] Motor local inconclusivo. Consultando IA Online...");
-        res = await analyzePestImage(base64, canvas);
+        res = await analyzePestImage(base64, canvas, normMode);
       }
 
       // 5. Fallback de Emergência (Offline Total ou Erro de Conexão)
@@ -366,7 +383,35 @@ const App: React.FC = () => {
         reader.readAsDataURL(file);
       });
       
-      const resRaw = await analyzePestImage(dataUrl.split(',')[1]);
+      const base64 = dataUrl.split(',')[1];
+      
+      // 1. Identificação Local (TFLite) com Auto-Calibração
+      const canvas = document.createElement('canvas');
+      const imgElement = new Image();
+      imgElement.src = dataUrl;
+      await new Promise(r => imgElement.onload = r);
+      canvas.width = imgElement.width;
+      canvas.height = imgElement.height;
+      canvas.getContext('2d')?.drawImage(imgElement, 0, 0);
+
+      const results = await Promise.all([
+        analyzeOffline(canvas, 0),
+        analyzeOffline(canvas, 1),
+        analyzeOffline(canvas, 2)
+      ]);
+      
+      // Ordena por confiança. Em caso de empate, prioriza o Modo 2
+      const localRes = results.sort((a, b) => {
+        if (Math.abs(b.confidence - a.confidence) < 0.01) {
+          if (b.normalizationMode === 2) return 1;
+          if (a.normalizationMode === 2) return -1;
+        }
+        return b.confidence - a.confidence;
+      })[0];
+      
+      setNormMode(localRes.normalizationMode || 0);
+
+      const resRaw = await analyzePestImage(base64, canvas, localRes.normalizationMode);
       let res = resRaw;
 
       // --- LÓGICA DE ECONOMIA DE API PARA UPLOAD ---
@@ -477,6 +522,9 @@ const App: React.FC = () => {
          <div className="flex-1 pr-4">
            <h2 className="text-2xl font-black text-slate-900 leading-tight">{pest.name}</h2>
            <p className="text-emerald-600 font-bold italic text-sm">{pest.scientificName}</p>
+           {(pest as any).maxScoreIndex !== undefined && (
+             <p className="text-[10px] text-slate-400 font-bold mt-1">DEBUG ID: {(pest as any).maxScoreIndex}</p>
+           )}
            {pest.source && (
              <div className="flex items-center gap-1 mt-1 opacity-50">
                <Globe size={10} />
@@ -912,7 +960,53 @@ const App: React.FC = () => {
               </div>
             
             {currentResult.pestFound && currentResult.pest ? (
-              <PestBioCard pest={currentResult.pest} />
+              <>
+                <PestBioCard pest={currentResult.pest} />
+                
+                {currentResult.topResults && currentResult.topResults.length > 1 && (
+                  <div className="mt-8 bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
+                        <Activity size={14} /> Outras Probabilidades (IA Local)
+                      </h4>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => {
+                            // Abre a enciclopédia para seleção manual
+                            setView('main');
+                            setSearchTerm('');
+                            setTimeout(() => {
+                              const el = document.getElementById('encyclopedia-section');
+                              el?.scrollIntoView({ behavior: 'smooth' });
+                            }, 100);
+                          }}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-full text-[10px] font-black uppercase tracking-wider hover:bg-emerald-700 transition-colors shadow-sm"
+                        >
+                          <Search size={12} /> Não é esta praga? Clique aqui
+                        </button>
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      {currentResult.topResults.map((res, idx) => (
+                        <div key={idx} className={`flex items-center justify-between p-3 rounded-2xl ${idx === 0 ? 'bg-emerald-50 border border-emerald-100' : 'bg-slate-50'}`}>
+                          <div className="flex items-center gap-3">
+                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${idx === 0 ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500'}`}>
+                              {idx + 1}
+                            </span>
+                            <div>
+                              <p className={`text-xs font-bold ${idx === 0 ? 'text-emerald-900' : 'text-slate-700'}`}>{res.label}</p>
+                              <p className="text-[9px] text-slate-400 font-bold uppercase">Índice: {res.index}</p>
+                            </div>
+                          </div>
+                          <p className={`text-xs font-black ${idx === 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                            {(res.confidence * 100).toFixed(1)}%
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="bg-white p-10 rounded-[3rem] text-center space-y-6 shadow-sm border border-slate-100">
                 <div className="bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto text-slate-200">
@@ -938,7 +1032,7 @@ const App: React.FC = () => {
                                 await new Promise(r => img.onload = r);
                                 setLoading(true);
                                 try {
-                                  const result = await analyzeOffline(img);
+                                  const result = await analyzeOffline(img, normMode);
                                   setCurrentResult({ ...result, capturedImage: currentResult.capturedImage });
                                 } finally { setLoading(false); }
                               }}
