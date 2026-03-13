@@ -707,6 +707,11 @@ const App: React.FC = () => {
           if (msg.includes("Failed to fetch")) {
             msg = "Erro de Conexão: Não foi possível alcançar o servidor. Verifique sua internet ou as configurações do Supabase (URL/Key) no menu Settings.";
           }
+
+          const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+          if (anonKey.startsWith('sb_') || anonKey.startsWith('pk_')) {
+            msg = "ERRO DE CONFIGURAÇÃO: Você está usando uma chave do STRIPE (começa com sb_ ou pk_) no lugar da chave do Supabase. O login não funcionará até que você coloque a chave correta do Supabase no menu Settings.";
+          }
           
           setError(msg); 
         } finally { 
