@@ -136,6 +136,7 @@ let modelStatus = "Inativo";
 
 export const getModelStatus = () => modelStatus;
 export const isLocalModelLoaded = () => !!localModel;
+export const isLocalModelLoading = () => isModelLoading;
 
 // Lista exata baseada no treinamento do Google Colab (Ordem Alfabética do TensorFlow)
 // Importante: Manter os erros de digitação do treino para o mapeamento de índices funcionar
@@ -147,16 +148,16 @@ export const MODEL_LABELS = [
   'Barata Alemã',                 // 4
   'Besouro Vermelho da Farinha',  // 5
   'Broca do Trigo',               // 6
-  'Gorgulho do Arroz',            // 7
+  'Escorpião Amarelo',            // 7
   'Escorpião Amarelo do Nordeste',// 8
   'Escorpião Marrom',             // 9
   'Formiga Carpinteira',          // 10
   'Formiga Fantasma',             // 11
   'Formiga Lava-pés',             // 12
-  'Mosca de Banheiro',            // 13
+  'Gorgulho do Arroz',            // 13
   'Mosca Doméstica',              // 14
   'Mosca Varejeira',              // 15
-  'Escorpião Amarelo',            // 16
+  'Mosca de Banheiro',            // 16
   'Ratazana',                     // 17
   'Rato Camundongo',              // 18
   'Rato Preto'                    // 19
@@ -164,11 +165,13 @@ export const MODEL_LABELS = [
 
 // Mapeamento para nomes bonitos na interface (Corrige os erros de digitação do treino)
 const LABEL_MAP: Record<string, string> = {
-  'Aranha Marrom': 'Aranha-marrom',
   'Aranha Armadeira': 'Aranha-armadeira',
+  'Aranha Marrom': 'Aranha-marrom',
   'Barata Alemã': 'Barata-alemã',
   'Barata Americana': 'Barata-americana',
   'Barata Oriental': 'Barata-oriental',
+  'Besouro Vermelho da Farinha': 'Besouro-vermelho-da-farinha',
+  'Broca do Trigo': 'Broca-do-trigo',
   'Escorpião Marrom': 'Escorpião-marrom',
   'Escorpião Amarelo': 'Escorpião-amarelo',
   'Escorpião Amarelo do Nordeste': 'Escorpião-amarelo-do-nordeste',
