@@ -417,7 +417,11 @@ const App: React.FC = () => {
             const fileName = `${user.id}/${Date.now()}.jpg`;
             const { error: uploadError } = await supabase.storage
               .from('pest_detections')
-              .upload(fileName, blob, { contentType: 'image/jpeg', cacheControl: '3600' });
+              .upload(fileName, blob, { 
+                contentType: 'image/jpeg', 
+                cacheControl: '31536000', // 1 ano de cache para economizar Egress
+                upsert: false 
+              });
 
             if (!uploadError) {
               const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
@@ -545,7 +549,11 @@ const App: React.FC = () => {
             const fileName = `${user.id}/${Date.now()}_file.jpg`;
             const { error: uploadError } = await supabase.storage
               .from('pest_detections')
-              .upload(fileName, blob, { contentType: 'image/jpeg', cacheControl: '3600' });
+              .upload(fileName, blob, { 
+                contentType: 'image/jpeg', 
+                cacheControl: '31536000', // 1 ano de cache para economizar Egress
+                upsert: false 
+              });
 
             if (!uploadError) {
               const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
