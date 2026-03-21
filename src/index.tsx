@@ -14,7 +14,7 @@ import {
 import { registerSW } from 'virtual:pwa-register';
 import './index.css';
 import { supabase } from './supabaseClient';
-import PrivacyPolicy from './PrivacyPolicy';
+import PestScanPrivacy from './legal/PestScanPrivacy';
 import { 
   analyzePestImage, 
   analyzePestByName, 
@@ -148,7 +148,7 @@ const App: React.FC = () => {
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColor);
     document.body.style.backgroundColor = bodyBg;
     document.documentElement.style.backgroundColor = bodyBg;
-
+ 
     if (view === 'splash' || (view !== 'auth' && !isLocalModelLoaded() && !isLocalModelLoading())) {
       console.log(`🔄 [App] Verificando motor local na view: ${view}`);
       loadLocalModel();
@@ -706,7 +706,7 @@ const App: React.FC = () => {
     </div>
   );
 
-  if (view === 'privacy') return <PrivacyPolicy onBack={() => setView(user ? 'main' : 'auth')} />;
+  if (view === 'privacy') return <PestScanPrivacy onBack={() => setView(user ? 'main' : 'auth')} />;
 
   if (view === 'splash') return (
     <div className="h-screen bg-emerald-950 flex flex-col items-center justify-center text-white p-6 text-center">
