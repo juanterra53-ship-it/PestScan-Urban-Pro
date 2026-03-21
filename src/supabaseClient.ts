@@ -9,10 +9,6 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.warn("⚠️ CONFIGURAÇÃO AUSENTE: As variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY não foram encontradas. O login online não funcionará até que você as configure no menu Settings.");
 }
 
-if (supabaseAnonKey && (supabaseAnonKey.startsWith('sb_') || supabaseAnonKey.startsWith('pk_'))) {
-  console.error("❌ ERRO CRÍTICO: A chave VITE_SUPABASE_ANON_KEY configurada é uma chave do STRIPE, não do Supabase. O login IRÁ FALHAR. Por favor, obtenha a 'anon public key' no painel do Supabase.");
-}
-
 if (!supabaseUrl.includes('supabase.co')) {
   console.warn("⚠️ ALERTA DE CONFIGURAÇÃO: A URL do Supabase parece estar incorreta. Verifique as variáveis de ambiente.");
 }
