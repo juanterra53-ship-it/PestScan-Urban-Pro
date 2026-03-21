@@ -459,12 +459,15 @@ const App: React.FC = () => {
         reader.readAsDataURL(file);
       });
       
-      const base64 = dataUrl.split(',')[1];
-      
       // 1. Identificação Local (TFLite) com Auto-Calibração
+      // REDIMENSIONAMENTO PRÉVIO: Essencial para fotos de galeria (alta resolução)
+      // Isso evita que o celular trave tentando processar imagens gigantes
+      const resizedDataUrl = await resizeImage(dataUrl, 800);
+      const resizedBase64 = resizedDataUrl.split(',')[1];
+
       const canvas = document.createElement('canvas');
       const imgElement = new Image();
-      imgElement.src = dataUrl;
+      imgElement.src = resizedDataUrl;
       await new Promise(r => imgElement.onload = r);
       canvas.width = imgElement.width;
       canvas.height = imgElement.height;
@@ -495,8 +498,11 @@ const App: React.FC = () => {
       
       setNormMode(localRes.normalizationMode || 0);
 
-      const resRaw = await analyzePestImage(base64, canvas, localRes.normalizationMode);
+      const resRaw = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
       let res = resRaw;
+
+      // Limpeza de memória
+      imgElement.src = '';
 
       // --- LÓGICA DE ECONOMIA DE API PARA UPLOAD ---
       // Se a IA Online identificou algo, vamos ver se já temos uma ficha melhor no banco
