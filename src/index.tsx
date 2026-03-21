@@ -226,12 +226,23 @@ const App: React.FC = () => {
   }, []);
 
   const fetchHistory = async () => {
+    if (!user) return;
     try {
-      const { data } = await supabase
+      let query = supabase
         .from('pest_detections')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(20);
+        .limit(50); // Aumentado para ver mais no histórico
+
+      // LÓGICA DE PRIVACIDADE:
+      // Se NÃO for o administrador, filtra apenas os próprios registros
+      const isAdmin = user.email === 'juan.terra53@gmail.com';
+      if (!isAdmin) {
+        query = query.eq('user_id', user.id);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
       
       if (data) {
         setHistory(data.map((item: any) => ({ 
@@ -332,15 +343,15 @@ const App: React.FC = () => {
       let res: RecognitionResult;
 
       // --- MOTOR HÍBRIDO SÊNIOR COM AUTO-CALIBRAÇÃO ---
-      // Testamos os 3 modos sequencialmente e paramos se a confiança for alta (> 80%)
+      // Testamos os 3 modos sequencialmente e paramos se a confiança for alta (> 85%)
       // Isso economiza processamento e bateria em dispositivos mais simples
       let results: RecognitionResult[] = [];
       for (let i = 0; i < 3; i++) {
         const resMode = await analyzeOffline(canvas, i);
         results.push(resMode);
         
-        // Se a confiança for alta (> 80%), paramos a busca para economizar recursos
-        if (resMode.pestFound && resMode.confidence > 0.80) {
+        // Se a confiança for alta (> 85%), paramos a busca para economizar recursos
+        if (resMode.pestFound && resMode.confidence > 0.85) {
           console.log(`🎯 [Auto-Calibração] Confiança Alta (${resMode.confidence}) no Modo ${i}. Parando busca.`);
           break;
         }
@@ -359,7 +370,9 @@ const App: React.FC = () => {
       
       console.log(`🧠 [Auto-Calibração] Melhor Modo: ${localRes.normalizationMode} Confiança: ${localRes.confidence}`);
 
-      if (localRes.pestFound && localRes.confidence > 0.20 && localRes.pest) {
+      // RIGOR AUMENTADO: Se a confiança local for menor que 80%, forçamos a IA Online
+      // Isso evita que um rato seja identificado como um inseto (Gorgulho)
+      if (localRes.pestFound && localRes.confidence > 0.80 && localRes.pest) {
         // 2. Busca no Banco de Dados por Referência
         const { data: existingData } = await supabase
           .from('pest_detections')
@@ -480,14 +493,14 @@ const App: React.FC = () => {
       canvas.getContext('2d')?.drawImage(imgElement, 0, 0);
 
       // --- MOTOR HÍBRIDO SÊNIOR COM AUTO-CALIBRAÇÃO ---
-      // Testamos os 3 modos sequencialmente e paramos se a confiança for alta (> 80%)
+      // Testamos os 3 modos sequencialmente e paramos se a confiança for alta (> 85%)
       let results: RecognitionResult[] = [];
       for (let i = 0; i < 3; i++) {
         const resMode = await analyzeOffline(canvas, i);
         results.push(resMode);
         
-        // Se a confiança for alta (> 80%), paramos a busca para economizar recursos
-        if (resMode.pestFound && resMode.confidence > 0.80) {
+        // Se a confiança for alta (> 85%), paramos a busca para economizar recursos
+        if (resMode.pestFound && resMode.confidence > 0.85) {
           console.log(`🎯 [Auto-Calibração] Confiança Alta (${resMode.confidence}) no Modo ${i}. Parando busca.`);
           break;
         }
