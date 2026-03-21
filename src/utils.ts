@@ -25,8 +25,8 @@ export const resizeImage = async (base64: string, maxWidth = 800): Promise<strin
         return;
       }
       ctx.drawImage(img, 0, 0, width, height);
-      // Use lower quality (0.7) to further reduce file size
-      const resizedBase64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+      // Use lower quality (0.6) to further reduce file size and Egress
+      const resizedBase64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
       resolve(resizedBase64);
     };
     img.onerror = (err) => reject(err);
