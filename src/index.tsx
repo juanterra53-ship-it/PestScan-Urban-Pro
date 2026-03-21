@@ -14,7 +14,7 @@ import {
 import { registerSW } from 'virtual:pwa-register';
 import './index.css';
 import { supabase } from './supabaseClient';
-import PrivacyPolicy from './components/PrivacyPolicy.tsx';
+import PrivacyPolicy from './PrivacyPolicy';
 import { 
   analyzePestImage, 
   analyzePestByName, 
