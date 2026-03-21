@@ -321,18 +321,30 @@ const App: React.FC = () => {
       canvas.height = videoRef.current.videoHeight;
       const ctx = canvas.getContext('2d');
       ctx?.drawImage(videoRef.current, 0, 0);
+      
+      // PARAR A CÂMERA IMEDIATAMENTE APÓS A CAPTURA
+      // Isso libera CPU/GPU para a análise de IA, essencial para o Redmi 12
+      stopCamera();
+      
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
       const base64 = dataUrl.split(',')[1];
 
       let res: RecognitionResult;
 
       // --- MOTOR HÍBRIDO SÊNIOR COM AUTO-CALIBRAÇÃO ---
-      // Testamos os 3 modos e pegamos o melhor resultado
-      const results = await Promise.all([
-        analyzeOffline(canvas, 0),
-        analyzeOffline(canvas, 1),
-        analyzeOffline(canvas, 2)
-      ]);
+      // Testamos os 3 modos sequencialmente e paramos se a confiança for alta (> 80%)
+      // Isso economiza processamento e bateria em dispositivos mais simples
+      let results: RecognitionResult[] = [];
+      for (let i = 0; i < 3; i++) {
+        const resMode = await analyzeOffline(canvas, i);
+        results.push(resMode);
+        
+        // Se a confiança for alta (> 80%), paramos a busca para economizar recursos
+        if (resMode.pestFound && resMode.confidence > 0.80) {
+          console.log(`🎯 [Auto-Calibração] Confiança Alta (${resMode.confidence}) no Modo ${i}. Parando busca.`);
+          break;
+        }
+      }
       
       // Ordena por confiança. Em caso de empate, prioriza o Modo 2 (mais estável para aranhas)
       const localRes = results.sort((a, b) => {
@@ -458,11 +470,19 @@ const App: React.FC = () => {
       canvas.height = imgElement.height;
       canvas.getContext('2d')?.drawImage(imgElement, 0, 0);
 
-      const results = await Promise.all([
-        analyzeOffline(canvas, 0),
-        analyzeOffline(canvas, 1),
-        analyzeOffline(canvas, 2)
-      ]);
+      // --- MOTOR HÍBRIDO SÊNIOR COM AUTO-CALIBRAÇÃO ---
+      // Testamos os 3 modos sequencialmente e paramos se a confiança for alta (> 80%)
+      let results: RecognitionResult[] = [];
+      for (let i = 0; i < 3; i++) {
+        const resMode = await analyzeOffline(canvas, i);
+        results.push(resMode);
+        
+        // Se a confiança for alta (> 80%), paramos a busca para economizar recursos
+        if (resMode.pestFound && resMode.confidence > 0.80) {
+          console.log(`🎯 [Auto-Calibração] Confiança Alta (${resMode.confidence}) no Modo ${i}. Parando busca.`);
+          break;
+        }
+      }
       
       // Ordena por confiança. Em caso de empate, prioriza o Modo 2
       const localRes = results.sort((a, b) => {
