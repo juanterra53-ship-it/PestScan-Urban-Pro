@@ -451,24 +451,26 @@ const App: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     setLoading(true); setError(null);
+    
+    // Usar URL.createObjectURL é MUITO mais eficiente em memória que FileReader.readAsDataURL
+    // Especialmente para fotos de 10MB+ da galeria
+    const objectUrl = URL.createObjectURL(file);
+    
     try {
-      const reader = new FileReader();
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      
       // 1. Identificação Local (TFLite) com Auto-Calibração
       // REDIMENSIONAMENTO PRÉVIO: Essencial para fotos de galeria (alta resolução)
-      // Isso evita que o celular trave tentando processar imagens gigantes
-      const resizedDataUrl = await resizeImage(dataUrl, 800);
-      const resizedBase64 = resizedDataUrl.split(',')[1];
+      // Reduzimos para 512px para ser ultra-rápido no Redmi 12
+      const resizedBase64 = await resizeImage(objectUrl, 512);
+      const resizedDataUrl = `data:image/jpeg;base64,${resizedBase64}`;
 
       const canvas = document.createElement('canvas');
       const imgElement = new Image();
       imgElement.src = resizedDataUrl;
-      await new Promise(r => imgElement.onload = r);
+      await new Promise((resolve, reject) => {
+        imgElement.onload = resolve;
+        imgElement.onerror = reject;
+      });
+      
       canvas.width = imgElement.width;
       canvas.height = imgElement.height;
       canvas.getContext('2d')?.drawImage(imgElement, 0, 0);
@@ -501,8 +503,9 @@ const App: React.FC = () => {
       const resRaw = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
       let res = resRaw;
 
-      // Limpeza de memória
+      // Limpeza de memória imediata
       imgElement.src = '';
+      URL.revokeObjectURL(objectUrl);
 
       // --- LÓGICA DE ECONOMIA DE API PARA UPLOAD ---
       // Se a IA Online identificou algo, vamos ver se já temos uma ficha melhor no banco
@@ -526,7 +529,7 @@ const App: React.FC = () => {
         }
       }
 
-      const resultWithImage = { ...res, capturedImage: dataUrl };
+      const resultWithImage = { ...res, capturedImage: resizedDataUrl };
       
       setCurrentResult(resultWithImage);
       setView('result');
@@ -534,11 +537,10 @@ const App: React.FC = () => {
       // Salvar histórico e upload para arquivo também
       if (res.pestFound && user && user.id !== 'offline') {
         try {
-          let imageUrl = dataUrl;
+          let imageUrl = resizedDataUrl;
 
           try {
-            // Redimensiona para 800px antes do upload para economizar banda (Egress)
-            const resizedBase64 = await resizeImage(dataUrl, 800);
+            // Já redimensionamos no início para 512px, vamos usar esse mesmo
             const blob = base64ToBlob(resizedBase64);
             const fileName = `${user.id}/${Date.now()}_file.jpg`;
             const { error: uploadError } = await supabase.storage
@@ -571,6 +573,7 @@ const App: React.FC = () => {
     } finally {
       setLoading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     }
   };
 
