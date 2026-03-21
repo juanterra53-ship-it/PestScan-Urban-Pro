@@ -17,8 +17,8 @@ export default defineConfig(({ mode }) => {
     ""
   ).trim();
   
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || env.VITE_SUPABASE_URL || "https://nvkufyoakhnsnvkqvhow.supabase.co";
-  const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || "sb_publishable_4LSh4M3KWAVKl0PBuqZtlw_lCuJQeJ8";
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || env.VITE_SUPABASE_URL || "";
+  const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || "";
 
   return {
     plugins: [
@@ -26,13 +26,18 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['model/modelo_barata.tflite', 'favicon.ico', 'robots.txt', 'apple-touch-icon.png'],
+        includeAssets: [
+          'model/modelo_universal.tflite', 
+          'favicon.ico', 
+          'robots.txt', 
+          'apple-touch-icon.png'
+        ],
         workbox: {
           cleanupOutdatedCaches: true,
           clientsClaim: true,
           skipWaiting: true,
           navigateFallback: 'index.html',
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,json,tflite,wasm}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,json,tflite}'],
           maximumFileSizeToCacheInBytes: 100 * 1024 * 1024, // 100MB
           runtimeCaching: [
             {
