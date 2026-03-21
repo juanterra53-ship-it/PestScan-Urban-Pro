@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type, Modality, GenerateContentResponse } from "@google/genai";
 import { RecognitionResult } from "./types";
 import { ENCYCLOPEDIA_DATA } from './data/encyclopedia';
+import { resizeImage } from './utils';
 
 /**
  * PESTSCAN PRO - SERVICE LAYER v2.7.1
@@ -70,27 +71,6 @@ const PEST_SCHEMA = {
     }
   },
   required: ["pestFound", "confidence"]
-};
-
-const resizeImage = async (base64: string, maxWidth = 800): Promise<string> => {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      let width = img.width;
-      let height = img.height;
-      if (width > maxWidth) {
-        height = Math.round((height * maxWidth) / width);
-        width = maxWidth;
-      }
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx?.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
-    };
-    img.src = `data:image/jpeg;base64,${base64}`;
-  });
 };
 
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
@@ -217,7 +197,7 @@ export const loadLocalModel = async () => {
     
     try {
       const tryLoad = async (url: string) => {
-        const response = await fetch(url, { cache: 'no-store' });
+        const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         
         const buffer = await response.arrayBuffer();
