@@ -14,17 +14,20 @@ import {
 import { registerSW } from 'virtual:pwa-register';
 import './index.css';
 import { supabase } from './supabaseClient';
+import PrivacyPolicy from './PrivacyPolicy';
 import { 
   analyzePestImage, 
   analyzePestByName, 
   loadLocalModel, 
   isLocalModelLoaded, 
+  isLocalModelLoading,
   getModelStatus, 
   analyzeOffline, 
   generatePestAudio 
 } from './geminiService';
 import { RecognitionResult, HistoryEntry, EncyclopediaItem, PestInfo } from './types';
 import { ENCYCLOPEDIA_DATA } from './data/encyclopedia';
+import { resizeImage, base64ToBlob } from './utils';
 
 const normalizeString = (str: string) => 
   str.toLowerCase()
@@ -34,7 +37,7 @@ const normalizeString = (str: string) =>
      .trim();
 
 const App: React.FC = () => {
-  const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail'>('splash');
+  const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail' | 'privacy'>('splash');
   const [loading, setLoading] = useState(false);
   const [currentResult, setCurrentResult] = useState<RecognitionResult | null>(null);
   const [selectedPest, setSelectedPest] = useState<PestInfo | null>(null);
@@ -59,16 +62,29 @@ const App: React.FC = () => {
   const [modelStatus, setModelStatus] = useState(getModelStatus());
   const [normMode, setNormMode] = useState(2);
 
+  const [showSkip, setShowSkip] = useState(false);
+
   // Monitoramento do modelo local
   useEffect(() => {
+    const skipTimer = setTimeout(() => setShowSkip(true), 5000);
+    console.log("🔍 [App] Iniciando monitoramento do modelo...");
     const checkModel = setInterval(() => {
       const ready = isLocalModelLoaded();
       const status = getModelStatus();
-      setIsModelReady(ready);
-      setModelStatus(status);
-      if (ready) clearInterval(checkModel);
+      
+      if (ready) {
+        console.log("✅ [App] Modelo Local Detectado como Ativo!");
+        setIsModelReady(true);
+        setModelStatus(status);
+        clearInterval(checkModel);
+      } else {
+        setModelStatus(status);
+      }
     }, 1000);
-    return () => clearInterval(checkModel);
+    return () => {
+      clearInterval(checkModel);
+      clearTimeout(skipTimer);
+    };
   }, []);
   
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -87,7 +103,44 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Estilos globais dinâmicos
+  // Registro do Service Worker para PWA
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+      registerSW({
+        onNeedRefresh() {
+          console.log("🆕 Nova versão disponível! Recarregando...");
+          window.location.reload();
+        },
+        onOfflineReady() {
+          console.log("✅ App pronto para uso offline.");
+        },
+      });
+    }
+  }, []);
+
+  const forceUpdate = async () => {
+    setLoading(true);
+    try {
+      console.log("🧹 Limpando caches e forçando atualização...");
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const registration of registrations) {
+          await registration.unregister();
+        }
+      }
+      
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map(name => caches.delete(name)));
+      
+      console.log("🔄 Recarregando página...");
+      window.location.href = window.location.origin + '?v=' + Date.now();
+    } catch (e) {
+      console.error("Erro ao forçar atualização:", e);
+      window.location.reload();
+    }
+  };
+
+  // Estilos globais dinâmicos e carregamento do modelo
   useEffect(() => {
     const themeColor = (view === 'splash' || view === 'auth') ? '#022c22' : '#064e3b';
     const bodyBg = (view === 'splash' || view === 'auth') ? '#022c22' : '#f8fafc';
@@ -96,7 +149,8 @@ const App: React.FC = () => {
     document.body.style.backgroundColor = bodyBg;
     document.documentElement.style.backgroundColor = bodyBg;
 
-    if (view === 'splash') {
+    if (view === 'splash' || (view !== 'auth' && !isLocalModelLoaded() && !isLocalModelLoading())) {
+      console.log(`🔄 [App] Verificando motor local na view: ${view}`);
       loadLocalModel();
     }
   }, [view]);
@@ -107,20 +161,28 @@ const App: React.FC = () => {
 
     const init = async () => {
       try {
+        console.log("🚀 [App] Iniciando inicialização...");
         loadLocalModel().catch(e => console.warn("Modelo offline:", e));
         
         const splashPromise = new Promise(r => setTimeout(r, 2000));
         
-        const { data, error } = await supabase.auth.getSession();
-        await splashPromise;
+        // Timeout de 5 segundos para o Supabase para evitar travamentos
+        const sessionPromise = Promise.race([
+          supabase.auth.getSession(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout Supabase")), 5000))
+        ]) as Promise<{ data: { session: any }; error: any }>;
+
+        const [{ data, error }] = await Promise.all([sessionPromise, splashPromise]);
         
         if (!isMounted) return;
 
         if (error || !data.session?.user) {
+           console.log("👤 [App] Sessão não encontrada ou erro, indo para Auth");
            setView('auth');
            return;
         }
 
+        console.log("✅ [App] Sessão ativa encontrada:", data.session.user.email);
         setUser({ 
           id: data.session.user.id, 
           email: data.session.user.email || '', 
@@ -131,11 +193,11 @@ const App: React.FC = () => {
       } catch (err: any) {
         console.error("Init error:", err);
         if (isMounted) {
-          if (err?.message?.includes("Failed to fetch")) {
-            setError("Erro de Conexão: Falha ao carregar dados iniciais. Verifique sua internet.");
-          }
+          setError(err?.message === "Timeout Supabase" ? "Conexão lenta detectada. Você pode entrar em modo offline." : null);
           setView('auth');
         }
+      } finally {
+        if (isMounted) setLoading(false);
       }
     };
 
@@ -337,7 +399,9 @@ const App: React.FC = () => {
         try {
           let imageUrl = dataUrl;
           try {
-            const blob = await (await fetch(dataUrl)).blob();
+            // Redimensiona para 800px antes do upload para economizar banda (Egress)
+            const resizedBase64 = await resizeImage(dataUrl, 800);
+            const blob = base64ToBlob(resizedBase64);
             const fileName = `${user.id}/${Date.now()}.jpg`;
             const { error: uploadError } = await supabase.storage
               .from('pest_detections')
@@ -447,10 +511,13 @@ const App: React.FC = () => {
           let imageUrl = dataUrl;
 
           try {
+            // Redimensiona para 800px antes do upload para economizar banda (Egress)
+            const resizedBase64 = await resizeImage(dataUrl, 800);
+            const blob = base64ToBlob(resizedBase64);
             const fileName = `${user.id}/${Date.now()}_file.jpg`;
             const { error: uploadError } = await supabase.storage
               .from('pest_detections')
-              .upload(fileName, file, { contentType: file.type, cacheControl: '3600' });
+              .upload(fileName, blob, { contentType: 'image/jpeg', cacheControl: '3600' });
 
             if (!uploadError) {
               const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
@@ -639,6 +706,8 @@ const App: React.FC = () => {
     </div>
   );
 
+  if (view === 'privacy') return <PrivacyPolicy onBack={() => setView(user ? 'main' : 'auth')} />;
+
   if (view === 'splash') return (
     <div className="h-screen bg-emerald-950 flex flex-col items-center justify-center text-white p-6 text-center">
       <div className="relative mb-8">
@@ -651,10 +720,46 @@ const App: React.FC = () => {
       <p className="text-xs text-emerald-400/60 uppercase font-black tracking-[0.4em] mt-4">Inteligência em Controle de Pragas</p>
       
       <div className="mt-16 flex flex-col items-center gap-3">
-        <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-400' : 'bg-slate-600 animate-pulse'}`} />
+        <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-400' : (modelStatus.includes('Erro') ? 'bg-red-500' : 'bg-slate-600 animate-pulse')}`} />
         <p className="text-[9px] font-black uppercase tracking-widest text-emerald-400/40">
-          {isModelReady ? `Motor Local: ${modelStatus}` : `Sincronizando: ${modelStatus}`}
+          {isModelReady ? `Motor Local: ${modelStatus}` : (modelStatus.includes('Erro') ? modelStatus : `Sincronizando: ${modelStatus}`)}
         </p>
+        
+        <div className="flex flex-col gap-2 mt-4">
+          {modelStatus.includes('Erro') && (
+            <button 
+              onClick={() => loadLocalModel()}
+              className="px-6 py-2 bg-emerald-600/20 border border-emerald-500/30 rounded-full text-[10px] font-black uppercase tracking-widest text-emerald-400 hover:bg-emerald-600/40 transition-all"
+            >
+              Tentar Novamente
+            </button>
+          )}
+
+          <button 
+            onClick={forceUpdate}
+            className="px-6 py-2 bg-white/5 border border-white/10 rounded-full text-[9px] font-black uppercase tracking-widest text-white/30 hover:bg-white/10 transition-all flex items-center gap-2"
+          >
+            <RefreshCw size={10} /> Forçar Atualização
+          </button>
+
+          {showSkip && !isModelReady && (
+            <button 
+              onClick={() => setView('auth')}
+              className="px-6 py-2 bg-emerald-600/20 border border-emerald-500/30 rounded-full text-[10px] font-black uppercase tracking-widest text-emerald-400 hover:bg-emerald-600/40 transition-all"
+            >
+              Pular Carregamento
+            </button>
+          )}
+          
+          <p className="text-[8px] font-black uppercase tracking-[0.3em] text-white/20 mt-2">v2.7.5 Stable</p>
+          
+          <button 
+            onClick={() => setView('privacy')}
+            className="mt-4 text-[8px] font-black uppercase tracking-widest text-white/20 hover:text-emerald-400 transition-colors"
+          >
+            Política de Privacidade
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -683,7 +788,13 @@ const App: React.FC = () => {
         setLoading(true); setError(null);
         try { 
           if (authMode === 'login') {
-            const { data, error } = await supabase.auth.signInWithPassword({ email, password }); 
+            // Timeout de 10 segundos para o login
+            const loginPromise = Promise.race([
+              supabase.auth.signInWithPassword({ email, password }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("O servidor demorou muito para responder. Verifique sua conexão.")), 10000))
+            ]) as Promise<{ data: any; error: any }>;
+
+            const { data, error } = await loginPromise;
             if (error) throw error;
             if (data.user) {
               setUser({ 
@@ -705,14 +816,9 @@ const App: React.FC = () => {
           let msg = e.message || e.error_description || (typeof e === 'string' ? e : "Erro de autenticação");
           
           if (msg.includes("Failed to fetch")) {
-            msg = "Erro de Conexão: Não foi possível alcançar o servidor. Verifique sua internet ou as configurações do Supabase (URL/Key) no menu Settings.";
+            msg = "Erro de Conexão: Não foi possível alcançar o servidor. Verifique sua internet.";
           }
 
-          const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
-          if (anonKey.startsWith('sb_') || anonKey.startsWith('pk_')) {
-            msg = "ERRO DE CONFIGURAÇÃO: Você está usando uma chave do STRIPE (começa com sb_ ou pk_) no lugar da chave do Supabase. O login não funcionará até que você coloque a chave correta do Supabase no menu Settings.";
-          }
-          
           setError(msg); 
         } finally { 
           setLoading(false); 
@@ -731,15 +837,29 @@ const App: React.FC = () => {
         </button>
       </form>
       
+      <button 
+        onClick={() => setView('privacy')}
+        className="mt-8 text-[10px] font-black uppercase tracking-widest text-emerald-400/40 hover:text-emerald-400 transition-colors"
+      >
+        Política de Privacidade
+      </button>
+      
       <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="mt-10 text-emerald-400 text-[10px] font-black uppercase tracking-widest hover:text-emerald-300 transition-colors">
         {authMode === 'login' ? 'Não tem conta? Cadastre-se' : 'Já possui conta? Faça Login'}
       </button>
       
       <button 
         onClick={() => { setUser({ id: 'offline', email: 'offline@local', name: 'Modo Offline' }); setView('main'); }} 
-        className={`mt-6 text-[10px] font-black uppercase tracking-widest underline underline-offset-4 transition-all ${error?.includes("Erro de Conexão") ? "text-emerald-400 scale-110 decoration-emerald-400" : "text-slate-500 decoration-slate-700"}`}
+        className={`mt-6 text-[10px] font-black uppercase tracking-widest underline underline-offset-4 transition-all ${error?.includes("Erro de Conexão") || error?.includes("Conexão lenta") ? "text-emerald-400 scale-110 decoration-emerald-400" : "text-slate-500 decoration-slate-700"}`}
       >
         Entrar em Modo de Campo (Offline)
+      </button>
+
+      <button 
+        onClick={forceUpdate}
+        className="mt-12 flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-white/20 hover:text-white/40 transition-all"
+      >
+        <RefreshCw size={10} /> Forçar Atualização do App
       </button>
     </div>
   );
@@ -797,6 +917,13 @@ const App: React.FC = () => {
                 <X size={20} className="text-white/80" />
               </button>
             )}
+            <button 
+              onClick={() => setView('privacy')}
+              className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl transition-colors border border-white/10"
+              title="Privacidade"
+            >
+              <ShieldCheck size={20} className="text-white/80" />
+            </button>
           </div>
         </div>
       </header>
@@ -1109,7 +1236,7 @@ const App: React.FC = () => {
       )}
 
       <div className="fixed bottom-3 right-6 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em] pointer-events-none z-[60] opacity-50">
-        v2.7.3 Stable
+        v2.7.5 Stable
       </div>
     </div>
   );
