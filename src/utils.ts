@@ -30,7 +30,12 @@ export const resizeImage = async (base64: string, maxWidth = 800): Promise<strin
       resolve(resizedBase64);
     };
     img.onerror = (err) => reject(err);
-    img.src = base64.startsWith('data:') ? base64 : `data:image/jpeg;base64,${base64}`;
+    // Se for um Blob URL (blob:) ou Data URL (data:), não adicionamos o prefixo
+    if (base64.startsWith('blob:') || base64.startsWith('data:')) {
+      img.src = base64;
+    } else {
+      img.src = `data:image/jpeg;base64,${base64}`;
+    }
   });
 };
 
