@@ -404,14 +404,16 @@ const App: React.FC = () => {
       // 5. Fallback de Emergência (Offline Total ou Erro de Conexão)
       const isConnectionError = res.message?.includes("Erro de Conexão") || res.message?.includes("Failed to fetch");
       
-      if ((!res.pestFound || isConnectionError) && localRes.pestFound) {
-        console.log("🔄 [Senior] Fallback de Emergência para Motor Local devido a erro ou falta de resultado.");
+      // RIGOR MÁXIMO: Só usamos o motor local se houver erro de conexão OU se a confiança local for altíssima (> 85%)
+      // Se a IA Online disse que não encontrou nada (!res.pestFound), respeitamos isso a menos que a local tenha certeza absoluta.
+      if ((isConnectionError || (!res.pestFound && localRes.confidence > 0.85)) && localRes.pestFound) {
+        console.log("🔄 [Senior] Fallback de Emergência para Motor Local devido a erro ou alta confiança local.");
         res = {
           ...localRes,
           pestFound: true,
           message: isConnectionError 
             ? `Conexão instável. Usando IA Local: ${localRes.message}` 
-            : `Modo Emergência: ${localRes.message}`
+            : `IA Local (Alta Confiança): ${localRes.message}`
         };
       }
 
