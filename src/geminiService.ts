@@ -333,11 +333,11 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
     const predictedLabel = labelsToUse[maxScoreIndex] || "Praga Detectada";
     
     // Se a confiança for muito baixa ou for Background, não considera como praga
-    if (predictedLabel === 'Background' || maxScore < 0.10) {
+    if (predictedLabel === 'Background' || maxScore < 0.50) {
       return { 
         pestFound: false, 
         confidence: maxScore, 
-        message: maxScore < 0.10 ? `Confiança insuficiente (${confidencePct}%).` : "Nenhuma praga detectada (Fundo).", 
+        message: maxScore < 0.50 ? `Confiança insuficiente (${confidencePct}%).` : "Nenhuma praga detectada (Fundo).", 
         source: 'IA Local',
         maxScoreIndex,
         topResults: top5,
@@ -347,6 +347,21 @@ export const analyzeOffline = async (imageElement: HTMLImageElement | HTMLCanvas
 
     const cleanName = getCleanName(predictedLabel);
     const searchName = normalizeString(cleanName);
+    
+    // REGRA DE OURO: O Gorgulho do Arroz é um falso positivo comum.
+    // Exigimos 90% de confiança para ele no motor local.
+    if (cleanName === 'Gorgulho-do-arroz' && maxScore < 0.90) {
+      return { 
+        pestFound: false, 
+        confidence: maxScore, 
+        message: `Confiança insuficiente para Gorgulho (${confidencePct}%).`, 
+        source: 'IA Local',
+        maxScoreIndex,
+        topResults: top5,
+        normalizationMode: normMode
+      };
+    }
+
     const localPest = ENCYCLOPEDIA_DATA.find(p => normalizeString(p.name).includes(searchName));
 
     if (localPest) {
