@@ -8,9 +8,11 @@ import {
   Trash2, Clock, Hammer, FlaskConical,
   User, Lock, Mail, LogOut, CheckCircle,
   Database, ShieldCheck, Zap, ZapOff,
-  Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw,
-  ChevronDown, ChevronUp, Activity, AlertCircle
+  Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw, Printer,
+  ChevronDown, ChevronUp, Activity, AlertCircle, Share2
 } from 'lucide-react';
+import { toJpeg } from 'html-to-image';
+import { jsPDF } from 'jspdf';
 import { registerSW } from 'virtual:pwa-register';
 import './index.css';
 import { supabase } from './supabaseClient';
@@ -37,7 +39,7 @@ const normalizeString = (str: string) =>
      .trim();
 
 const App: React.FC = () => {
-  const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail' | 'privacy'>('splash');
+  const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail' | 'privacy' | 'report' | 'report-setup'>('splash');
   const [loading, setLoading] = useState(false);
   const [currentResult, setCurrentResult] = useState<RecognitionResult | null>(null);
   const [selectedPest, setSelectedPest] = useState<PestInfo | null>(null);
@@ -45,6 +47,25 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [isAiSearching, setIsAiSearching] = useState(false);
+  const [location, setLocation] = useState<{lat: number, lon: number, address: string} | null>(null);
+  
+  // Report Fields
+  const [reportArea, setReportArea] = useState('');
+  const [reportObservation, setReportObservation] = useState('');
+  const [reportMeasures, setReportMeasures] = useState('');
+  const [modal, setModal] = useState<{
+    isOpen: boolean, 
+    title: string, 
+    message: string, 
+    onConfirm?: () => void, 
+    onSecondary?: () => void,
+    confirmText?: string,
+    secondaryText?: string,
+    type: 'confirm' | 'alert'
+  }>({
+    isOpen: false, title: '', message: '', type: 'alert'
+  });
+  const [toast, setToast] = useState<{message: string, type: 'success' | 'error' | 'info'} | null>(null);
   
   const [flashOn, setFlashOn] = useState(false);
   const [hasFlash, setHasFlash] = useState(false);
@@ -87,9 +108,11 @@ const App: React.FC = () => {
     };
   }, []);
   
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const reportRef = useRef<HTMLDivElement>(null);
 
   // Monitoramento de conexão
   useEffect(() => {
@@ -232,10 +255,8 @@ const App: React.FC = () => {
         .from('pest_detections')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(50); // Aumentado para ver mais no histórico
+        .limit(50);
 
-      // LÓGICA DE PRIVACIDADE:
-      // Se NÃO for o administrador, filtra apenas os próprios registros
       const isAdmin = user.email === 'juan.terra53@gmail.com';
       if (!isAdmin) {
         query = query.eq('user_id', user.id);
@@ -244,16 +265,202 @@ const App: React.FC = () => {
       const { data, error } = await query;
       if (error) throw error;
       
-      if (data) {
-        setHistory(data.map((item: any) => ({ 
-          id: item.id, 
-          timestamp: new Date(item.created_at).getTime(), 
-          image: item.image_data, 
-          result: item.analysis_result 
-        })));
+        if (data) {
+          setHistory(data.map((item: any) => ({ 
+            id: item.id, 
+            timestamp: new Date(item.created_at).getTime(), 
+            image: item.image_data, 
+            result: item.analysis_result,
+            location: item.location_name
+          })));
+        }
+      } catch (err) { 
+        console.error("Erro ao carregar histórico:", err); 
       }
-    } catch (err) { 
-      console.error("Erro ao carregar histórico:", err); 
+    };
+  
+    const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleShare = async () => {
+    if (!currentResult || !currentResult.pest || !reportRef.current) {
+      showToast("Dados do relatório não encontrados.", "error");
+      return;
+    }
+    
+    setIsGeneratingPDF(true);
+    try {
+      // 1. Gerar o PDF
+      // Aguarda um pouco mais para garantir que todas as imagens (mapa, etc) carregaram
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const element = reportRef.current;
+      
+      // Verifica se o elemento tem dimensões válidas
+      if (element.offsetWidth === 0 || element.offsetHeight === 0) {
+        throw new Error("O relatório ainda não foi totalmente carregado ou está oculto.");
+      }
+
+      // Aguarda um pouco para garantir que as imagens (mapa, etc) carreguem
+      await new Promise(r => setTimeout(r, 800));
+
+      let dataUrl;
+      try {
+        console.log("📸 [PDF] Iniciando captura com html-to-image...");
+        dataUrl = await toJpeg(element, {
+          quality: 0.85,
+          backgroundColor: '#ffffff',
+          pixelRatio: 1.5,
+          cacheBust: true,
+          style: {
+            borderRadius: '0',
+            boxShadow: 'none',
+          }
+        });
+      } catch (err: any) {
+        console.error("❌ [PDF] Erro no html-to-image:", err);
+        throw new Error("Falha ao processar as imagens do relatório.");
+      }
+      
+      if (!dataUrl) {
+        throw new Error("Não foi possível capturar a imagem do relatório.");
+      }
+      
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: [element.offsetWidth, element.offsetHeight]
+      });
+      
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      
+      pdf.addImage(dataUrl, 'JPEG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+      
+      const pdfBlob = pdf.output('blob');
+      const fileName = `Relatorio-PestScan-${Date.now()}.pdf`;
+      const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+
+      // 2. Tentar compartilhar
+      const shareData: any = {
+        title: `Relatório de Inspeção: ${currentResult.pest.name}`,
+        text: `Confira o Certificado de Inspeção Digital do PestScan Pro para ${currentResult.pest.name}.`,
+        files: [pdfFile]
+      };
+
+      try {
+        const canShareFiles = typeof navigator.share === 'function' && 
+                             typeof navigator.canShare === 'function' && 
+                             navigator.canShare({ files: [pdfFile] });
+
+        if (canShareFiles) {
+          await navigator.share(shareData);
+        } else if (typeof navigator.share === 'function') {
+          await navigator.share({
+            title: shareData.title,
+            text: shareData.text,
+            url: window.location.origin
+          });
+          pdf.save(fileName);
+          showToast("PDF baixado e link compartilhado!", "success");
+        } else {
+          await navigator.clipboard.writeText(`${shareData.title}\n${shareData.text}\n${window.location.origin}`);
+          pdf.save(fileName);
+          showToast("Link copiado e PDF baixado!", "success");
+        }
+      } catch (shareErr: any) {
+        if (shareErr.name === 'AbortError') return;
+        
+        console.error("Erro no navigator.share:", shareErr);
+        // Fallback final
+        try {
+          await navigator.clipboard.writeText(`${shareData.title}\n${shareData.text}\n${window.location.origin}`);
+          pdf.save(fileName);
+          showToast("Link copiado e PDF baixado!", "success");
+        } catch (clipErr) {
+          pdf.save(fileName);
+          showToast("PDF baixado com sucesso!", "success");
+        }
+      }
+    } catch (err: any) {
+      console.error("Erro ao compartilhar:", err);
+      const errorMsg = err?.message || "Erro desconhecido";
+      showToast(`Erro: ${errorMsg}`, "error");
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
+  const deleteScan = async (id: string, imageUrl: string) => {
+    setModal({
+      isOpen: true,
+      title: "Excluir Registro",
+      message: "Deseja realmente excluir este registro permanentemente?",
+      type: 'confirm',
+      onConfirm: async () => {
+        setLoading(true);
+        try {
+          // 1. Deletar do banco
+          const { error: dbError } = await supabase
+            .from('pest_detections')
+            .delete()
+            .eq('id', id);
+          
+          if (dbError) throw dbError;
+
+          // 2. Tentar deletar do storage se for uma URL do Supabase
+          if (imageUrl.includes('supabase.co')) {
+            const path = imageUrl.split('pest_detections/')[1];
+            if (path) {
+              await supabase.storage.from('pest_detections').remove([path]);
+            }
+          }
+
+          setHistory(prev => prev.filter(h => h.id !== id));
+          if (currentResult && (currentResult as any).id === id) {
+            setCurrentResult(null);
+            setView('history');
+          }
+          showToast("Registro excluído com sucesso!", "success");
+        } catch (err) {
+          console.error("Erro ao excluir:", err);
+          showToast("Erro ao excluir registro.", "error");
+        } finally {
+          setLoading(false);
+          setModal(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  const getGeolocation = (): Promise<GeolocationPosition> => {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error("Geolocalização não suportada"));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true,
+        timeout: 5000,
+        maximumAge: 0
+      });
+    });
+  };
+
+  const getReverseGeocoding = async (lat: number, lon: number): Promise<string> => {
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`);
+      const data = await res.json();
+      if (data.address) {
+        const city = data.address.city || data.address.town || data.address.village || data.address.suburb || "Cidade Desconhecida";
+        const state = data.address.state || "";
+        return `${city}${state ? `, ${state}` : ""}`;
+      }
+      return "Localização Desconhecida";
+    } catch (e) {
+      return "Localização Indisponível";
     }
   };
 
@@ -327,14 +534,27 @@ const App: React.FC = () => {
     
     setLoading(true); setError(null);
     try {
+      // CAPTURA DE LOCALIZAÇÃO (EM PARALELO - NÃO BLOQUEIA O INÍCIO DA ANÁLISE)
+      let locData = { lat: 0, lon: 0, address: "Localização não disponível" };
+      const locationPromise = (async () => {
+        try {
+          const pos = await getGeolocation();
+          const lat = pos.coords.latitude;
+          const lon = pos.coords.longitude;
+          const address = await getReverseGeocoding(lat, lon);
+          return { lat, lon, address };
+        } catch (locErr) {
+          console.warn("Erro ao obter localização:", locErr);
+          return locData;
+        }
+      })();
+
       const canvas = document.createElement('canvas');
       canvas.width = videoRef.current.videoWidth;
       canvas.height = videoRef.current.videoHeight;
       const ctx = canvas.getContext('2d');
       ctx?.drawImage(videoRef.current, 0, 0);
       
-      // PARAR A CÂMERA IMEDIATAMENTE APÓS A CAPTURA
-      // Isso libera CPU/GPU para a análise de IA, essencial para o Redmi 12
       stopCamera();
       
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
@@ -342,38 +562,25 @@ const App: React.FC = () => {
 
       let res: RecognitionResult;
 
-      // --- MOTOR HÍBRIDO SÊNIOR COM AUTO-CALIBRAÇÃO ---
-      // Testamos os 3 modos sequencialmente e paramos se a confiança for alta (> 85%)
-      // Isso economiza processamento e bateria em dispositivos mais simples
+      // --- MOTOR HÍBRIDO SÊNIOR OTIMIZADO ---
+      // Executa primeiro o modo padrão (2 - Raw) que é o mais estável
       let results: RecognitionResult[] = [];
-      for (let i = 0; i < 3; i++) {
-        const resMode = await analyzeOffline(canvas, i);
-        results.push(resMode);
-        
-        // Se a confiança for alta (> 85%), paramos a busca para economizar recursos
-        if (resMode.pestFound && resMode.confidence > 0.85) {
-          console.log(`🎯 [Auto-Calibração] Confiança Alta (${resMode.confidence}) no Modo ${i}. Parando busca.`);
-          break;
+      const resMode2 = await analyzeOffline(canvas, 2);
+      results.push(resMode2);
+      
+      // Só tenta outros modos se a confiança for baixa (< 80%)
+      if (!resMode2.pestFound || resMode2.confidence < 0.80) {
+        for (let i of [0, 1]) {
+          const resMode = await analyzeOffline(canvas, i);
+          results.push(resMode);
+          if (resMode.pestFound && resMode.confidence > 0.85) break;
         }
       }
       
-      // Ordena por confiança. Em caso de empate, prioriza o Modo 2 (mais estável para aranhas)
-      const localRes = results.sort((a, b) => {
-        if (Math.abs(b.confidence - a.confidence) < 0.01) {
-          if (b.normalizationMode === 2) return 1;
-          if (a.normalizationMode === 2) return -1;
-        }
-        return b.confidence - a.confidence;
-      })[0];
-      
+      const localRes = results.sort((a, b) => b.confidence - a.confidence)[0];
       setNormMode(localRes.normalizationMode || 0);
       
-      console.log(`🧠 [Auto-Calibração] Melhor Modo: ${localRes.normalizationMode} Confiança: ${localRes.confidence}`);
-
-      // RIGOR AUMENTADO: Se a confiança local for menor que 80%, forçamos a IA Online
-      // Isso evita que um rato seja identificado como um inseto (Gorgulho)
       if (localRes.pestFound && localRes.confidence > 0.80 && localRes.pest) {
-        // 2. Busca no Banco de Dados por Referência
         const { data: existingData } = await supabase
           .from('pest_detections')
           .select('analysis_result')
@@ -383,7 +590,6 @@ const App: React.FC = () => {
           .limit(1);
 
         if (existingData && existingData.length > 0 && existingData[0].analysis_result.pestFound) {
-          console.log("✅ [Senior] Referência encontrada no banco!");
           res = {
             ...existingData[0].analysis_result,
             confidence: localRes.confidence,
@@ -391,23 +597,14 @@ const App: React.FC = () => {
             source: 'Banco de Dados'
           };
         } else {
-          // 3. Se não tem no banco, usa IA Online para gerar ficha técnica completa
-          console.log("🌐 [Senior] Sem referência no banco. Consultando IA Online...");
           res = await analyzePestImage(base64, canvas, normMode);
         }
       } else {
-        // 4. Fallback total para IA Online se o motor local falhar
-        console.log("🌐 [Senior] Motor local inconclusivo. Consultando IA Online...");
         res = await analyzePestImage(base64, canvas, normMode);
       }
 
-      // 5. Fallback de Emergência (Offline Total ou Erro de Conexão)
       const isConnectionError = res.message?.includes("Erro de Conexão") || res.message?.includes("Failed to fetch");
-      
-      // RIGOR MÁXIMO: Só usamos o motor local se houver erro de conexão OU se a confiança local for altíssima (> 85%)
-      // Se a IA Online disse que não encontrou nada (!res.pestFound), respeitamos isso a menos que a local tenha certeza absoluta.
       if ((isConnectionError || (!res.pestFound && localRes.confidence > 0.85)) && localRes.pestFound) {
-        console.log("🔄 [Senior] Fallback de Emergência para Motor Local devido a erro ou alta confiança local.");
         res = {
           ...localRes,
           pestFound: true,
@@ -417,16 +614,19 @@ const App: React.FC = () => {
         };
       }
 
+      // Aguarda a localização (se ainda não terminou)
+      const finalLoc = await locationPromise;
+      res.location = { latitude: finalLoc.lat, longitude: finalLoc.lon, address: finalLoc.address };
+      setLocation(finalLoc);
+
       const resultWithImage = { ...res, capturedImage: dataUrl };
       setCurrentResult(resultWithImage);
       setView('result');
 
-      // Salvar histórico e upload
       if (res.pestFound && user && user.id !== 'offline') {
         try {
           let imageUrl = dataUrl;
           try {
-            // Redimensiona para 800px antes do upload para economizar banda (Egress)
             const resizedBase64 = await resizeImage(dataUrl, 800);
             const blob = base64ToBlob(resizedBase64);
             const fileName = `${user.id}/${Date.now()}.jpg`;
@@ -434,7 +634,7 @@ const App: React.FC = () => {
               .from('pest_detections')
               .upload(fileName, blob, { 
                 contentType: 'image/jpeg', 
-                cacheControl: '31536000', // 1 ano de cache para economizar Egress
+                cacheControl: '31536000',
                 upsert: false 
               });
 
@@ -451,7 +651,10 @@ const App: React.FC = () => {
             image_data: imageUrl, 
             pest_name: res.pest?.name || 'Scan', 
             confidence: res.confidence, 
-            analysis_result: resultWithImage 
+            analysis_result: resultWithImage,
+            location_name: finalLoc.address,
+            latitude: finalLoc.lat,
+            longitude: finalLoc.lon
           });
           fetchHistory();
         } catch (e) {
@@ -471,14 +674,24 @@ const App: React.FC = () => {
     if (!file) return;
     setLoading(true); setError(null);
     
-    // Usar URL.createObjectURL é MUITO mais eficiente em memória que FileReader.readAsDataURL
-    // Especialmente para fotos de 10MB+ da galeria
     const objectUrl = URL.createObjectURL(file);
     
     try {
-      // 1. Identificação Local (TFLite) com Auto-Calibração
-      // REDIMENSIONAMENTO PRÉVIO: Essencial para fotos de galeria (alta resolução)
-      // Reduzimos para 512px para ser ultra-rápido no Redmi 12
+      // CAPTURA DE LOCALIZAÇÃO (EM PARALELO)
+      let locData = { lat: 0, lon: 0, address: "Localização não disponível" };
+      const locationPromise = (async () => {
+        try {
+          const pos = await getGeolocation();
+          const lat = pos.coords.latitude;
+          const lon = pos.coords.longitude;
+          const address = await getReverseGeocoding(lat, lon);
+          return { lat, lon, address };
+        } catch (locErr) {
+          console.warn("Erro ao obter localização:", locErr);
+          return locData;
+        }
+      })();
+
       const resizedBase64 = await resizeImage(objectUrl, 512);
       const resizedDataUrl = `data:image/jpeg;base64,${resizedBase64}`;
 
@@ -494,40 +707,35 @@ const App: React.FC = () => {
       canvas.height = imgElement.height;
       canvas.getContext('2d')?.drawImage(imgElement, 0, 0);
 
-      // --- MOTOR HÍBRIDO SÊNIOR COM AUTO-CALIBRAÇÃO ---
-      // Testamos os 3 modos sequencialmente e paramos se a confiança for alta (> 85%)
+      // --- MOTOR HÍBRIDO SÊNIOR OTIMIZADO ---
       let results: RecognitionResult[] = [];
-      for (let i = 0; i < 3; i++) {
-        const resMode = await analyzeOffline(canvas, i);
-        results.push(resMode);
-        
-        // Se a confiança for alta (> 85%), paramos a busca para economizar recursos
-        if (resMode.pestFound && resMode.confidence > 0.85) {
-          console.log(`🎯 [Auto-Calibração] Confiança Alta (${resMode.confidence}) no Modo ${i}. Parando busca.`);
-          break;
+      const resMode2 = await analyzeOffline(canvas, 2);
+      results.push(resMode2);
+      
+      if (!resMode2.pestFound || resMode2.confidence < 0.80) {
+        for (let i of [0, 1]) {
+          const resMode = await analyzeOffline(canvas, i);
+          results.push(resMode);
+          if (resMode.pestFound && resMode.confidence > 0.85) break;
         }
       }
       
-      // Ordena por confiança. Em caso de empate, prioriza o Modo 2
-      const localRes = results.sort((a, b) => {
-        if (Math.abs(b.confidence - a.confidence) < 0.01) {
-          if (b.normalizationMode === 2) return 1;
-          if (a.normalizationMode === 2) return -1;
-        }
-        return b.confidence - a.confidence;
-      })[0];
-      
+      const localRes = results.sort((a, b) => b.confidence - a.confidence)[0];
       setNormMode(localRes.normalizationMode || 0);
 
       const resRaw = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
       let res = resRaw;
+
+      // Aguarda a localização
+      const finalLoc = await locationPromise;
+      res.location = { latitude: finalLoc.lat, longitude: finalLoc.lon, address: finalLoc.address };
+      setLocation(finalLoc);
 
       // Limpeza de memória imediata
       imgElement.src = '';
       URL.revokeObjectURL(objectUrl);
 
       // --- LÓGICA DE ECONOMIA DE API PARA UPLOAD ---
-      // Se a IA Online identificou algo, vamos ver se já temos uma ficha melhor no banco
       if (res.pestFound && res.pest) {
         const { data: existingData } = await supabase
           .from('pest_detections')
@@ -538,10 +746,11 @@ const App: React.FC = () => {
           .limit(1);
 
         if (existingData && existingData.length > 0) {
-          console.log("💰 [Economia] Usando ficha técnica otimizada do banco.");
+          const currentLocation = res.location;
           res = {
             ...existingData[0].analysis_result,
             confidence: res.confidence,
+            location: currentLocation,
             message: "Ficha técnica otimizada (Cache)",
             source: 'Banco de Dados'
           };
@@ -553,20 +762,18 @@ const App: React.FC = () => {
       setCurrentResult(resultWithImage);
       setView('result');
 
-      // Salvar histórico e upload para arquivo também
       if (res.pestFound && user && user.id !== 'offline') {
         try {
           let imageUrl = resizedDataUrl;
 
           try {
-            // Já redimensionamos no início para 512px, vamos usar esse mesmo
             const blob = base64ToBlob(resizedBase64);
             const fileName = `${user.id}/${Date.now()}_file.jpg`;
             const { error: uploadError } = await supabase.storage
               .from('pest_detections')
               .upload(fileName, blob, { 
                 contentType: 'image/jpeg', 
-                cacheControl: '31536000', // 1 ano de cache para economizar Egress
+                cacheControl: '31536000',
                 upsert: false 
               });
 
@@ -583,7 +790,10 @@ const App: React.FC = () => {
             image_data: imageUrl, 
             pest_name: res.pest?.name || 'Scan', 
             confidence: res.confidence, 
-            analysis_result: resultWithImage 
+            analysis_result: resultWithImage,
+            location_name: finalLoc.address,
+            latitude: finalLoc.lat,
+            longitude: finalLoc.lon
           });
           fetchHistory();
         } catch (e) {
@@ -918,6 +1128,55 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col max-w-md mx-auto relative overflow-hidden pb-[env(safe-area-inset-bottom)]">
+      {/* Custom Modal */}
+      {modal.isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white w-full max-w-sm rounded-[3rem] p-8 shadow-2xl animate-in zoom-in-95">
+            <h3 className="text-lg font-black text-slate-900 mb-2">{modal.title}</h3>
+            <p className="text-xs text-slate-500 leading-relaxed mb-8">{modal.message}</p>
+            <div className="flex gap-3">
+              {(modal.type === 'confirm' || modal.onSecondary) && (
+                <button 
+                  onClick={() => {
+                    if (modal.onSecondary) {
+                      modal.onSecondary();
+                    } else {
+                      setModal(prev => ({ ...prev, isOpen: false }));
+                    }
+                  }}
+                  className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
+                >
+                  {modal.secondaryText || (modal.type === 'confirm' ? 'Cancelar' : 'Fechar')}
+                </button>
+              )}
+              <button 
+                onClick={() => {
+                  if (modal.onConfirm) {
+                    modal.onConfirm();
+                  } else {
+                    setModal(prev => ({ ...prev, isOpen: false }));
+                  }
+                }}
+                className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
+              >
+                {modal.confirmText || (modal.type === 'confirm' ? 'Confirmar' : 'OK')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Toast */}
+      {toast && (
+        <div className={`fixed bottom-32 left-1/2 -translate-x-1/2 z-[100] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-4 ${
+          toast.type === 'success' ? 'bg-emerald-600 text-white' : 
+          toast.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 text-white'
+        }`}>
+          {toast.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+          <p className="text-[10px] font-black uppercase tracking-widest">{toast.message}</p>
+        </div>
+      )}
+
       <header className="bg-emerald-900 p-6 pt-[calc(3rem+env(safe-area-inset-top))] pb-12 rounded-b-[4rem] text-white sticky top-0 z-40 shadow-2xl border-b border-emerald-800/50">
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-4">
@@ -1100,23 +1359,36 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 history.map(entry => (
-                  <div key={entry.id} className="bg-white p-4 rounded-[3rem] border border-slate-100 flex gap-5 items-center shadow-sm active:scale-[0.98] transition-all" onClick={() => { setCurrentResult(entry.result); setView('result'); }}>
+                  <div key={entry.id} className="bg-white p-4 rounded-[3rem] border border-slate-100 flex gap-5 items-center shadow-sm active:scale-[0.98] transition-all relative group" onClick={() => { setCurrentResult(entry.result); setView('result'); }}>
                     <img src={entry.image} className="w-20 h-20 rounded-[2rem] object-cover shadow-inner" />
                     <div className="flex-1 overflow-hidden">
                       <p className="text-sm font-black text-slate-900 truncate mb-1">{entry.result.pest?.name || "Scan Desconhecido"}</p>
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-1">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5">
                           <Clock size={10} className="text-slate-300" />
-                          <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">{new Date(entry.timestamp).toLocaleDateString()}</p>
+                          <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">
+                            {new Date(entry.timestamp).toLocaleDateString()} - {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </p>
                         </div>
-                        {entry.result.source && (
-                          <span className="text-[8px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-tighter">
-                            {entry.result.source.split(' ')[0]}
-                          </span>
-                        )}
+                        <div className="flex items-center justify-between gap-2">
+                          {entry.location && (
+                            <div className="flex items-center gap-1.5 truncate">
+                              <Database size={10} className="text-emerald-300" />
+                              <p className="text-[9px] text-emerald-600 font-black uppercase truncate max-w-[120px]">{entry.location}</p>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <ChevronRight size={20} className="text-slate-200 mr-2" />
+                    <div className="flex flex-col items-center gap-2">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); deleteScan(entry.id, entry.image); }}
+                        className="p-3 bg-red-50 text-red-500 rounded-2xl hover:bg-red-100 transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                      <ChevronRight size={16} className="text-slate-200" />
+                    </div>
                   </div>
                 ))
               )}
@@ -1145,7 +1417,53 @@ const App: React.FC = () => {
             
             {currentResult.pestFound && currentResult.pest ? (
               <>
+                {/* Location & Time Info */}
+                <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-emerald-50 p-3 rounded-2xl text-emerald-600">
+                      <Database size={20} />
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Localização da Captura</p>
+                      <p className="text-xs font-bold text-slate-800">{currentResult.location?.address || 'Ponta Grossa, Paraná'}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Data e Hora</p>
+                    <p className="text-xs font-bold text-slate-800">{new Date().toLocaleDateString()} - {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                </div>
+
                 <PestBioCard pest={currentResult.pest} />
+                
+                {/* Innovative Feature: Generate Report */}
+                <div className="mt-8 bg-slate-900 p-8 rounded-[3rem] text-white space-y-6 shadow-2xl relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-full -mr-16 -mt-16 blur-3xl group-hover:bg-emerald-500/20 transition-all" />
+                  <div className="flex items-center gap-4">
+                    <div className="bg-emerald-500 p-3 rounded-2xl">
+                      <FlaskConical size={20} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-black uppercase tracking-tight">Certificado de Inspeção</h4>
+                      <p className="text-[10px] text-emerald-400/60 font-bold uppercase tracking-widest">Relatório Profissional Digital</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Gere um relatório técnico completo com fotos, geolocalização e recomendações biológicas para enviar via WhatsApp ou E-mail.
+                  </p>
+                  <button 
+                    onClick={() => {
+                      setLoading(true);
+                      setTimeout(() => {
+                        setLoading(false);
+                        setView('report-setup');
+                      }, 1000);
+                    }}
+                    className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 flex items-center justify-center gap-3 shadow-lg"
+                  >
+                    <Zap size={14} /> Gerar Relatório PDF
+                  </button>
+                </div>
                 
                 {currentResult.topResults && currentResult.topResults.length > 1 && (
                   <div className="mt-8 bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
@@ -1238,6 +1556,259 @@ const App: React.FC = () => {
               </div>
             )}
             <button onClick={() => setView('main')} className="w-full py-6 bg-slate-900 text-white rounded-[2.5rem] font-black text-sm uppercase shadow-2xl active:scale-95 transition-all">Finalizar Análise</button>
+          </div>
+        )}
+
+        {view === 'report-setup' && currentResult && (
+          <div className="space-y-8 pb-12 animate-in fade-in slide-in-from-bottom-10">
+            <div className="flex items-center gap-4">
+              <button onClick={() => setView('result')} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-50 active:scale-95 transition-all text-slate-400">
+                <ArrowLeft size={20} />
+              </button>
+              <div>
+                <h2 className="text-lg font-black text-slate-900 uppercase tracking-tight">Configurar Relatório</h2>
+                <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Preencha os dados adicionais</p>
+              </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-[3rem] shadow-xl border border-slate-100 space-y-8">
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                  <Globe size={14} /> Área Afetada (m² ou Hectares)
+                </label>
+                <input 
+                  type="text" 
+                  value={reportArea}
+                  onChange={(e) => setReportArea(e.target.value)}
+                  placeholder="Ex: 50 Hectares, Talhão 04"
+                  className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl text-xs font-bold text-slate-800 placeholder:text-slate-300 focus:border-emerald-500 focus:bg-white transition-all outline-none"
+                />
+              </div>
+
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                  <Activity size={14} /> Medidas Realizadas
+                </label>
+                <textarea 
+                  value={reportMeasures}
+                  onChange={(e) => setReportMeasures(e.target.value)}
+                  placeholder="Descreva as ações já tomadas no local..."
+                  rows={3}
+                  className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl text-xs font-bold text-slate-800 placeholder:text-slate-300 focus:border-emerald-500 focus:bg-white transition-all outline-none resize-none"
+                />
+              </div>
+
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                  <Info size={14} /> Observações Adicionais
+                </label>
+                <textarea 
+                  value={reportObservation}
+                  onChange={(e) => setReportObservation(e.target.value)}
+                  placeholder="Informações extras para o relatório técnico..."
+                  rows={3}
+                  className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl text-xs font-bold text-slate-800 placeholder:text-slate-300 focus:border-emerald-500 focus:bg-white transition-all outline-none resize-none"
+                />
+              </div>
+
+              <button 
+                onClick={() => setView('report')}
+                className="w-full py-5 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-emerald-600/20 active:scale-95 transition-all flex items-center justify-center gap-3"
+              >
+                <Zap size={14} /> Gerar Certificado Final
+              </button>
+            </div>
+          </div>
+        )}
+
+        {view === 'report' && currentResult && (
+          <div className="space-y-8 pb-12 animate-in fade-in zoom-in-95 print:p-0 print:m-0">
+            <div className="flex justify-between items-center px-2 print:hidden">
+              <button onClick={() => setView('report-setup')} className="flex items-center gap-3 text-[10px] font-black uppercase tracking-widest text-slate-400 bg-white px-6 py-4 rounded-2xl shadow-sm border border-slate-50 active:scale-95 transition-all">
+                <ArrowLeft size={18} /> Editar
+              </button>
+              <div className="flex gap-2">
+                <button 
+                  onClick={handleShare}
+                  disabled={isGeneratingPDF}
+                  className="flex-1 flex items-center justify-center gap-3 text-[10px] font-black uppercase tracking-widest text-white bg-emerald-600 px-6 py-4 rounded-2xl shadow-lg active:scale-95 transition-all disabled:opacity-50"
+                >
+                  {isGeneratingPDF ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  ) : (
+                    <Share2 size={18} />
+                  )}
+                  {isGeneratingPDF ? 'Gerando PDF...' : 'Compartilhar PDF'}
+                </button>
+              </div>
+            </div>
+
+            <div id="report-content" ref={reportRef} className="rounded-[3rem] overflow-hidden shadow-2xl border border-slate-100 relative print:shadow-none print:border-none print:rounded-none" style={{ backgroundColor: '#ffffff' }}>
+              {/* Header do Relatório */}
+              <div className="p-10 text-white relative overflow-hidden print:bg-emerald-900 print:text-white" style={{ backgroundColor: '#064e3b' }}>
+                <div className="absolute top-0 right-0 w-40 h-40 rounded-full -mr-20 -mt-20 blur-3xl print:hidden" style={{ backgroundColor: 'rgba(16, 185, 129, 0.2)' }} />
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="p-3 rounded-2xl backdrop-blur-md border border-emerald-400/20" style={{ backgroundColor: 'rgba(52, 211, 153, 0.2)', borderColor: 'rgba(52, 211, 153, 0.2)' }}>
+                    <ShieldCheck size={24} style={{ color: '#34d399' }} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black uppercase tracking-tighter" style={{ color: '#ffffff' }}>Certificado de Inspeção</h2>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: '#34d399' }}>PestScan Pro • Digital Report</p>
+                  </div>
+                </div>
+                <div className="flex justify-between items-end">
+                  <div>
+                    <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)' }}>ID do Relatório</p>
+                    <p className="text-xs font-mono font-bold" style={{ color: '#ffffff' }}>#PS-{Math.random().toString(36).substr(2, 9).toUpperCase()}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)' }}>Data de Emissão</p>
+                    <p className="text-xs font-bold" style={{ color: '#ffffff' }}>{new Date().toLocaleDateString('pt-BR')} - {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Conteúdo do Relatório */}
+              <div className="p-10 space-y-10">
+                {/* Imagem da Evidência e Mapa */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-4">
+                    <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                      <ImageIcon size={14} /> Evidência Fotográfica
+                    </h3>
+                    <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner" style={{ borderColor: '#f8fafc' }}>
+                      <img 
+                        src={currentResult.capturedImage} 
+                        alt="Evidência" 
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                        crossOrigin="anonymous"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                      <Globe size={14} /> Mapa de Localização
+                    </h3>
+                    <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner relative group" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
+                      {currentResult.location?.latitude && currentResult.location?.longitude ? (
+                        <>
+                          <img 
+                            src={`https://static-maps.yandex.ru/1.x/?lang=pt_BR&ll=${currentResult.location.longitude},${currentResult.location.latitude}&z=16&l=map&pt=${currentResult.location.longitude},${currentResult.location.latitude},pm2rdm`}
+                            alt="Mapa"
+                            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                            referrerPolicy="no-referrer"
+                            crossOrigin="anonymous"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = `https://picsum.photos/seed/map-${currentResult.location?.latitude}/800/450`;
+                            }}
+                          />
+                          {/* Simulação de Heatmap */}
+                          <div className="absolute inset-0 pointer-events-none">
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 rounded-full blur-2xl animate-pulse" style={{ backgroundColor: 'rgba(239, 68, 68, 0.3)' }} />
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full blur-xl" style={{ backgroundColor: 'rgba(249, 115, 22, 0.4)' }} />
+                          </div>
+                          <div className="absolute bottom-4 left-4 backdrop-blur-md px-3 py-1.5 rounded-full border shadow-sm flex items-center gap-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.9)', borderColor: '#e2e8f0' }}>
+                            <div className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: '#ef4444' }} />
+                            <span className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#475569' }}>Foco de Infestação Detectado</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center" style={{ backgroundColor: '#f8fafc' }}>
+                          <Globe size={32} style={{ color: '#e2e8f0' }} className="mb-2" />
+                          <p className="text-[10px] font-black uppercase tracking-widest leading-tight" style={{ color: '#94a3b8' }}>Coordenadas de GPS<br/>não vinculadas ao registro</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Dados da Identificação */}
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <p className="text-[9px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Praga Identificada</p>
+                    <p className="text-sm font-black uppercase tracking-tight" style={{ color: '#0f172a' }}>{currentResult.pest?.name || 'Não Identificado'}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-[9px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Nível de Confiança</p>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ backgroundColor: '#f1f5f9' }}>
+                        <div 
+                          className="h-full rounded-full" 
+                          style={{ width: `${currentResult.confidence * 100}%`, backgroundColor: '#10b981' }}
+                        />
+                      </div>
+                      <span className="text-[10px] font-black" style={{ color: '#059669' }}>{(currentResult.confidence * 100).toFixed(1)}%</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="h-px" style={{ backgroundColor: '#f1f5f9' }} />
+
+                {/* Campos Adicionais */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-4">
+                    <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                      <Search size={14} /> Detalhes da Área
+                    </h3>
+                    <div className="p-6 rounded-3xl border border-slate-100" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
+                      <p className="text-[8px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
+                      <p className="text-xs font-bold" style={{ color: '#1e293b' }}>{reportArea || 'Não informado'}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                      <Activity size={14} /> Medidas Realizadas
+                    </h3>
+                    <div className="p-6 rounded-3xl border border-slate-100" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
+                      <p className="text-xs font-bold leading-relaxed" style={{ color: '#334155' }}>{reportMeasures || 'Nenhuma medida registrada no momento da inspeção.'}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Observações */}
+                <div className="space-y-4">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                    <Info size={14} /> Observações do Técnico
+                  </h3>
+                  <div className="p-6 rounded-3xl border border-slate-100" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
+                    <p className="text-xs font-bold leading-relaxed whitespace-pre-wrap" style={{ color: '#334155' }}>{reportObservation || 'Sem observações adicionais.'}</p>
+                  </div>
+                </div>
+
+                {/* Localização Texto */}
+                <div className="space-y-4">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                    <Globe size={14} /> Endereço de Captura
+                  </h3>
+                  <div className="p-6 rounded-3xl border border-slate-100 flex justify-between items-center" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
+                    <p className="text-xs font-bold flex-1 pr-4" style={{ color: '#334155' }}>
+                      {currentResult.location?.address || 'Localização não disponível'}
+                    </p>
+                    <div className="text-right shrink-0">
+                      <p className="text-[8px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Coordenadas</p>
+                      <p className="text-[10px] font-mono font-bold" style={{ color: '#475569' }}>{currentResult.location?.latitude.toFixed(6)}, {currentResult.location?.longitude.toFixed(6)}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Assinatura Digital */}
+                <div className="pt-10 flex flex-col items-center border-t" style={{ borderColor: '#f1f5f9' }}>
+                  <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-xl" style={{ backgroundColor: '#0f172a' }}>
+                    <Bug size={32} className="text-emerald-400" />
+                  </div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.3em]" style={{ color: '#0f172a' }}>PestScan Pro AI</p>
+                  <p className="text-[8px] font-black uppercase tracking-widest mt-1" style={{ color: '#94a3b8' }}>Autenticação Biométrica Digital</p>
+                </div>
+              </div>
+            </div>
+            
+            <button 
+              onClick={() => setView('main')}
+              className="w-full py-6 bg-slate-900 text-white rounded-[2.5rem] font-black text-sm uppercase shadow-2xl active:scale-95 transition-all print:hidden"
+            >
+              Finalizar e Sair
+            </button>
           </div>
         )}
 
