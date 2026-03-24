@@ -93,6 +93,18 @@ export default defineConfig(({ mode }) => {
         }
       })
     ],
+    optimizeDeps: {
+      include: ['react-leaflet', 'leaflet']
+    },
+    ssr: {
+      noExternal: ['react-leaflet', 'leaflet']
+    },
+    resolve: {
+      alias: {
+        'react-leaflet': 'react-leaflet',
+        'leaflet': 'leaflet',
+      }
+    },
     base: '/', // Standard for Vercel to avoid path issues
     server: {
       host: true,
