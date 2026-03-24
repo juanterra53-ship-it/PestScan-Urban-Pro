@@ -34,6 +34,11 @@ export interface RecognitionResult {
   maxScoreIndex?: number;
   topResults?: { label: string; confidence: number; index: number }[];
   normalizationMode?: number;
+  location?: {
+    latitude: number;
+    longitude: number;
+    address?: string;
+  };
 }
 
 export interface HistoryEntry {
@@ -41,6 +46,7 @@ export interface HistoryEntry {
   timestamp: number;
   image: string;
   result: RecognitionResult;
+  location?: string;
 }
 
 export interface EncyclopediaItem {
