@@ -294,16 +294,19 @@ const App: React.FC = () => {
     setIsGeneratingPDF(true);
     try {
       const element = reportRef.current;
-      await new Promise(r => setTimeout(r, 1500));
+      // Pequeno delay para garantir renderização
+      await new Promise(r => setTimeout(r, 500));
       
-      console.log("📸 [PDF] Iniciando download...");
+      console.log("📸 [PDF] Iniciando captura para download...");
       
       let dataUrl;
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
       try {
         dataUrl = await toPng(element, {
-          quality: 0.7,
+          quality: 0.5, // Reduzido para ser mais rápido e leve
           backgroundColor: '#ffffff',
-          pixelRatio: 1,
+          pixelRatio: isMobile ? 1 : 1.2,
           cacheBust: true,
           skipFonts: true,
           style: {
@@ -314,10 +317,10 @@ const App: React.FC = () => {
           }
         });
       } catch (e) {
-        console.warn("⚠️ html-to-image falhou, tentando html2canvas...", e);
+        console.warn("⚠️ toPng falhou, tentando html2canvas...", e);
         const canvas = await html2canvas(element, {
           useCORS: true,
-          scale: 1,
+          scale: isMobile ? 1 : 1.2,
           backgroundColor: '#ffffff',
           logging: false
         });
@@ -325,7 +328,7 @@ const App: React.FC = () => {
       }
 
       if (!dataUrl || dataUrl.length < 1000) {
-        throw new Error("Falha ao capturar imagem.");
+        throw new Error("Falha ao capturar imagem do relatório.");
       }
 
       const pdf = new jsPDF({
@@ -337,8 +340,24 @@ const App: React.FC = () => {
       pdf.addImage(dataUrl, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
       
       const fileName = `Relatorio-PestScan-${Date.now()}.pdf`;
-      pdf.save(fileName);
-      showToast("Download concluído!", "success");
+      
+      // Método de download ultra-robusto
+      try {
+        const blob = pdf.output('blob');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        showToast("Download iniciado!", "success");
+      } catch (saveErr) {
+        console.warn("Download via link falhou, tentando pdf.save...", saveErr);
+        pdf.save(fileName);
+        showToast("Download concluído!", "success");
+      }
     } catch (err: any) {
       console.error("Erro no download:", err);
       showToast(`Erro: ${err.message || 'Falha técnica'}`, "error");
@@ -361,41 +380,37 @@ const App: React.FC = () => {
         throw new Error("O relatório ainda não foi totalmente carregado.");
       }
 
-      await new Promise(r => setTimeout(r, 1500));
+      // Delay mínimo para manter a ativação do usuário (User Activation)
+      await new Promise(r => setTimeout(r, 300));
 
       let dataUrl;
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
       try {
-        console.log("📸 [PDF] Iniciando captura para compartilhamento...");
+        console.log("📸 [PDF] Capturando para compartilhamento...");
         
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        
-        try {
-          dataUrl = await toPng(element, {
-            quality: 0.8,
-            backgroundColor: '#ffffff',
-            pixelRatio: isMobile ? 1 : 1.2,
-            cacheBust: true,
-            skipFonts: true,
-            style: {
-              borderRadius: '0',
-              boxShadow: 'none',
-              margin: '0',
-              padding: '0'
-            }
-          });
-        } catch (pngErr) {
-          console.warn("⚠️ toPng falhou, tentando fallback html2canvas...", pngErr);
-          const canvas = await html2canvas(element, {
-            useCORS: true,
-            scale: isMobile ? 1 : 1.2,
-            backgroundColor: '#ffffff',
-            logging: false
-          });
-          dataUrl = canvas.toDataURL('image/png');
-        }
-      } catch (err: any) {
-        console.error("❌ [PDF] Erro na captura:", err);
-        throw new Error("Falha ao processar as imagens. Tente novamente.");
+        dataUrl = await toPng(element, {
+          quality: 0.5,
+          backgroundColor: '#ffffff',
+          pixelRatio: isMobile ? 1 : 1.2,
+          cacheBust: true,
+          skipFonts: true,
+          style: {
+            borderRadius: '0',
+            boxShadow: 'none',
+            margin: '0',
+            padding: '0'
+          }
+        });
+      } catch (pngErr) {
+        console.warn("⚠️ toPng falhou, tentando fallback html2canvas...", pngErr);
+        const canvas = await html2canvas(element, {
+          useCORS: true,
+          scale: isMobile ? 1 : 1.2,
+          backgroundColor: '#ffffff',
+          logging: false
+        });
+        dataUrl = canvas.toDataURL('image/png');
       }
       
       if (!dataUrl || dataUrl.length < 1000) {
@@ -408,48 +423,58 @@ const App: React.FC = () => {
         format: [element.offsetWidth, element.offsetHeight]
       });
       
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      
-      pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+      pdf.addImage(dataUrl, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
       
       const pdfBlob = pdf.output('blob');
       const fileName = `Relatorio-PestScan-${Date.now()}.pdf`;
       const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
 
       // 2. Tentar compartilhar
-      const shareData: any = {
-        title: `Relatório de Inspeção: ${currentResult.pest.name}`,
-        text: `Confira o Certificado de Inspeção Digital do PestScan Pro para ${currentResult.pest.name}.`,
-        files: [pdfFile]
-      };
+      const canShare = typeof navigator.share === 'function';
+      const canShareFiles = canShare && typeof navigator.canShare === 'function' && navigator.canShare({ files: [pdfFile] });
 
-      try {
-        const canShareFiles = typeof navigator.share === 'function' && 
-                             typeof navigator.canShare === 'function' && 
-                             navigator.canShare({ files: [pdfFile] });
-
-        if (canShareFiles) {
-          console.log("📤 [PDF] Iniciando navigator.share...");
-          await navigator.share(shareData);
-          showToast("Relatório compartilhado!", "success");
-        } else {
-          console.log("💾 [PDF] navigator.share não disponível, salvando...");
-          pdf.save(fileName);
-          showToast("Download iniciado!", "success");
-        }
-      } catch (shareErr: any) {
-        if (shareErr.name === 'AbortError') return;
-        
-        console.error("Erro no navigator.share:", shareErr);
+      if (canShareFiles) {
         try {
-          pdf.save(fileName);
-          showToast("Download iniciado!", "success");
-        } catch (saveErr) {
-          const pdfUrl = URL.createObjectURL(pdfBlob);
-          window.open(pdfUrl, '_blank');
-          showToast("Relatório aberto em nova aba", "info");
+          console.log("📤 [PDF] Tentando navigator.share com arquivo...");
+          await navigator.share({
+            title: `Relatório: ${currentResult.pest.name}`,
+            text: `Confira o relatório de inspeção do PestScan Pro.`,
+            files: [pdfFile]
+          });
+          showToast("Compartilhado!", "success");
+        } catch (shareErr: any) {
+          if (shareErr.name === 'AbortError') return;
+          console.error("Erro no navigator.share com arquivo:", shareErr);
+          
+          // Fallback 1: Compartilhar apenas texto e baixar o arquivo
+          try {
+            await navigator.share({
+              title: `Relatório: ${currentResult.pest.name}`,
+              text: `Confira o relatório de inspeção do PestScan Pro.`,
+              url: window.location.href
+            });
+            handleDownloadOnly();
+            showToast("Texto compartilhado e download iniciado!", "info");
+          } catch (e2) {
+            handleDownloadOnly();
+          }
         }
+      } else if (canShare) {
+        // Fallback 2: Compartilhar link e baixar o arquivo
+        try {
+          await navigator.share({
+            title: `Relatório: ${currentResult.pest.name}`,
+            text: `Confira o relatório de inspeção do PestScan Pro.`,
+            url: window.location.href
+          });
+          handleDownloadOnly();
+          showToast("Link compartilhado e download iniciado!", "info");
+        } catch (e) {
+          handleDownloadOnly();
+        }
+      } else {
+        // Fallback 3: Apenas download
+        handleDownloadOnly();
       }
     } catch (err: any) {
       console.error("Erro ao gerar PDF:", err);
