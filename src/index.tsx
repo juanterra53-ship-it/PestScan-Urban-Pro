@@ -294,31 +294,30 @@ const App: React.FC = () => {
     setIsGeneratingPDF(true);
     try {
       const element = reportRef.current;
-      await new Promise(r => setTimeout(r, 400));
-      
-      console.log("📸 [PDF] Capturando para download...");
+      await new Promise(r => setTimeout(r, 500));
       
       let dataUrl;
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
       try {
         dataUrl = await toPng(element, {
-          quality: 0.4, // Mais leve para WebViews
+          quality: 0.6,
           backgroundColor: '#ffffff',
-          pixelRatio: isMobile ? 1 : 1.2,
+          pixelRatio: isMobile ? 1.5 : 2,
           cacheBust: true,
-          skipFonts: true,
-          style: { borderRadius: '0', boxShadow: 'none', margin: '0', padding: '0' }
+          skipFonts: false,
         });
       } catch (e) {
         const canvas = await html2canvas(element, {
           useCORS: true,
-          scale: isMobile ? 1 : 1.2,
+          scale: isMobile ? 1.5 : 2,
           backgroundColor: '#ffffff',
           logging: false
         });
         dataUrl = canvas.toDataURL('image/png');
       }
+
+      if (!dataUrl) throw new Error("Falha ao capturar imagem.");
 
       const pdf = new jsPDF({
         orientation: 'portrait',
@@ -328,25 +327,24 @@ const App: React.FC = () => {
       
       pdf.addImage(dataUrl, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
       
-      const fileName = `Relatorio-PestScan-${Date.now()}.pdf`;
-      
-      // Fallback para Android WebView: Usar Data URI em vez de Blob se necessário
-      try {
-        pdf.save(fileName);
-        showToast("Download iniciado!", "success");
-      } catch (saveErr) {
-        const pdfDataUri = pdf.output('datauristring');
+      const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
+      const isAndroidApp = /Android/i.test(navigator.userAgent);
+
+      if (isAndroidApp) {
+        const pdfBase64 = pdf.output('datauristring');
         const link = document.createElement('a');
-        link.href = pdfDataUri;
+        link.href = pdfBase64;
         link.download = fileName;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        showToast("Download via URI!", "info");
+      } else {
+        pdf.save(fileName);
+        showToast("Download concluído!", "success");
       }
     } catch (err: any) {
       console.error("Erro no download:", err);
-      showToast("Erro ao gerar arquivo.", "error");
+      showToast("Erro ao gerar PDF.", "error");
     } finally {
       setIsGeneratingPDF(false);
     }
@@ -354,32 +352,36 @@ const App: React.FC = () => {
 
   const handleShare = async () => {
     if (!currentResult || !currentResult.pest || !reportRef.current) {
-      showToast("Dados não encontrados.", "error");
+      showToast("Relatório não pronto.", "error");
       return;
     }
     
+    const isAndroidApp = /Android/i.test(navigator.userAgent);
+    if (isAndroidApp) {
+      handleDownloadOnly();
+      return;
+    }
+
     setIsGeneratingPDF(true);
     try {
       const element = reportRef.current;
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 500));
 
       let dataUrl;
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
       try {
         dataUrl = await toPng(element, {
-          quality: 0.4,
+          quality: 0.6,
           backgroundColor: '#ffffff',
-          pixelRatio: isMobile ? 1 : 1.2,
+          pixelRatio: isMobile ? 1.5 : 2,
           cacheBust: true,
-          skipFonts: true,
-          style: { borderRadius: '0', boxShadow: 'none', margin: '0', padding: '0' }
         });
-      } catch (pngErr) {
+      } catch (e) {
         const canvas = await html2canvas(element, {
           useCORS: true,
-          scale: isMobile ? 1 : 1.2,
-          backgroundColor: '#ffffff'
+          scale: isMobile ? 1.5 : 2,
+          backgroundColor: '#ffffff',
         });
         dataUrl = canvas.toDataURL('image/png');
       }
@@ -393,40 +395,21 @@ const App: React.FC = () => {
       pdf.addImage(dataUrl, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
       
       const pdfBlob = pdf.output('blob');
-      const fileName = `Relatorio-PestScan-${Date.now()}.pdf`;
+      const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
       const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
 
-      const canShare = typeof navigator.share === 'function';
-      
-      // Se estiver no Android WebView, o navigator.share pode existir mas falhar com arquivos
-      if (canShare) {
-        try {
-          // Tenta compartilhar o arquivo
-          await navigator.share({
-            title: `Relatório: ${currentResult.pest.name}`,
-            text: `Inspeção PestScan Pro`,
-            files: [pdfFile]
-          });
-          showToast("Compartilhado!", "success");
-        } catch (shareErr: any) {
-          // Se falhar (comum em WebViews), tenta compartilhar apenas o link e forçar o download
-          try {
-            await navigator.share({
-              title: `Relatório: ${currentResult.pest.name}`,
-              text: `Relatório gerado com sucesso.`,
-              url: window.location.href
-            });
-            handleDownloadOnly();
-          } catch (e) {
-            handleDownloadOnly();
-          }
-        }
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+        await navigator.share({
+          title: 'Relatório PestScan Pro',
+          text: 'Confira o relatório de inspeção.',
+          files: [pdfFile]
+        });
       } else {
         handleDownloadOnly();
       }
     } catch (err: any) {
-      console.error("Erro ao gerar PDF:", err);
-      showToast("Falha técnica no app.", "error");
+      console.error("Erro ao compartilhar:", err);
+      handleDownloadOnly();
     } finally {
       setIsGeneratingPDF(false);
     }
@@ -863,7 +846,6 @@ const App: React.FC = () => {
         .limit(1);
 
       if (existingData && existingData.length > 0 && existingData[0].analysis_result.pest) {
-        console.log("💰 [Economia] Busca profunda recuperada do banco.");
         setSelectedPest(existingData[0].analysis_result.pest);
         setView('detail');
         return;
