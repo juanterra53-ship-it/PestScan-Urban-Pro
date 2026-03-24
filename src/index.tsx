@@ -11,7 +11,8 @@ import {
   Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw, Printer,
   ChevronDown, ChevronUp, Activity, AlertCircle, Share2
 } from 'lucide-react';
-import { toJpeg } from 'html-to-image';
+import { toPng } from 'html-to-image';
+import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { registerSW } from 'virtual:pwa-register';
 import './index.css';
@@ -284,6 +285,68 @@ const App: React.FC = () => {
     setTimeout(() => setToast(null), 3000);
   };
 
+  const handleDownloadOnly = async () => {
+    if (!currentResult || !currentResult.pest || !reportRef.current) {
+      showToast("Relatório não pronto.", "error");
+      return;
+    }
+    
+    setIsGeneratingPDF(true);
+    try {
+      const element = reportRef.current;
+      await new Promise(r => setTimeout(r, 1500));
+      
+      console.log("📸 [PDF] Iniciando download...");
+      
+      let dataUrl;
+      try {
+        dataUrl = await toPng(element, {
+          quality: 0.7,
+          backgroundColor: '#ffffff',
+          pixelRatio: 1,
+          cacheBust: true,
+          skipFonts: true,
+          style: {
+            borderRadius: '0',
+            boxShadow: 'none',
+            margin: '0',
+            padding: '0'
+          }
+        });
+      } catch (e) {
+        console.warn("⚠️ html-to-image falhou, tentando html2canvas...", e);
+        const canvas = await html2canvas(element, {
+          useCORS: true,
+          scale: 1,
+          backgroundColor: '#ffffff',
+          logging: false
+        });
+        dataUrl = canvas.toDataURL('image/png');
+      }
+
+      if (!dataUrl || dataUrl.length < 1000) {
+        throw new Error("Falha ao capturar imagem.");
+      }
+
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: [element.offsetWidth, element.offsetHeight]
+      });
+      
+      pdf.addImage(dataUrl, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
+      
+      const fileName = `Relatorio-PestScan-${Date.now()}.pdf`;
+      pdf.save(fileName);
+      showToast("Download concluído!", "success");
+    } catch (err: any) {
+      console.error("Erro no download:", err);
+      showToast(`Erro: ${err.message || 'Falha técnica'}`, "error");
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
   const handleShare = async () => {
     if (!currentResult || !currentResult.pest || !reportRef.current) {
       showToast("Dados do relatório não encontrados.", "error");
@@ -292,46 +355,50 @@ const App: React.FC = () => {
     
     setIsGeneratingPDF(true);
     try {
-      // 1. Gerar o PDF
-      // Aguarda um pouco mais para garantir que todas as imagens (mapa, etc) carregaram
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
       const element = reportRef.current;
       
-      // Verifica se o elemento tem dimensões válidas
       if (element.offsetWidth === 0 || element.offsetHeight === 0) {
-        throw new Error("O relatório ainda não foi totalmente carregado ou está oculto.");
+        throw new Error("O relatório ainda não foi totalmente carregado.");
       }
 
-      // Aguarda um pouco para garantir que as imagens (mapa, etc) carreguem
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 1500));
 
       let dataUrl;
       try {
-        console.log("📸 [PDF] Iniciando captura com html-to-image...");
+        console.log("📸 [PDF] Iniciando captura para compartilhamento...");
         
-        // Detectar se é mobile para reduzir carga
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
         
-        dataUrl = await toJpeg(element, {
-          quality: 0.8,
-          backgroundColor: '#ffffff',
-          pixelRatio: isMobile ? 1 : 1.5, // Reduz resolução no mobile para evitar crash
-          cacheBust: true,
-          skipFonts: false,
-          style: {
-            borderRadius: '0',
-            boxShadow: 'none',
-            margin: '0',
-            padding: '0'
-          }
-        });
+        try {
+          dataUrl = await toPng(element, {
+            quality: 0.8,
+            backgroundColor: '#ffffff',
+            pixelRatio: isMobile ? 1 : 1.2,
+            cacheBust: true,
+            skipFonts: true,
+            style: {
+              borderRadius: '0',
+              boxShadow: 'none',
+              margin: '0',
+              padding: '0'
+            }
+          });
+        } catch (pngErr) {
+          console.warn("⚠️ toPng falhou, tentando fallback html2canvas...", pngErr);
+          const canvas = await html2canvas(element, {
+            useCORS: true,
+            scale: isMobile ? 1 : 1.2,
+            backgroundColor: '#ffffff',
+            logging: false
+          });
+          dataUrl = canvas.toDataURL('image/png');
+        }
       } catch (err: any) {
-        console.error("❌ [PDF] Erro no html-to-image:", err);
-        throw new Error("Falha ao processar as imagens do relatório. Verifique sua conexão.");
+        console.error("❌ [PDF] Erro na captura:", err);
+        throw new Error("Falha ao processar as imagens. Tente novamente.");
       }
       
-      if (!dataUrl) {
+      if (!dataUrl || dataUrl.length < 1000) {
         throw new Error("Não foi possível capturar a imagem do relatório.");
       }
       
@@ -344,7 +411,7 @@ const App: React.FC = () => {
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
       
-      pdf.addImage(dataUrl, 'JPEG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+      pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
       
       const pdfBlob = pdf.output('blob');
       const fileName = `Relatorio-PestScan-${Date.now()}.pdf`;
@@ -363,41 +430,30 @@ const App: React.FC = () => {
                              navigator.canShare({ files: [pdfFile] });
 
         if (canShareFiles) {
+          console.log("📤 [PDF] Iniciando navigator.share...");
           await navigator.share(shareData);
           showToast("Relatório compartilhado!", "success");
-        } else if (typeof navigator.share === 'function') {
-          // Fallback para compartilhar apenas texto/link e baixar o arquivo
-          await navigator.share({
-            title: shareData.title,
-            text: shareData.text,
-            url: window.location.href
-          });
-          pdf.save(fileName);
-          showToast("PDF baixado!", "success");
         } else {
-          // Fallback para download direto
+          console.log("💾 [PDF] navigator.share não disponível, salvando...");
           pdf.save(fileName);
-          showToast("Relatório baixado com sucesso!", "success");
+          showToast("Download iniciado!", "success");
         }
       } catch (shareErr: any) {
         if (shareErr.name === 'AbortError') return;
         
         console.error("Erro no navigator.share:", shareErr);
-        // Fallback final: Download direto
         try {
           pdf.save(fileName);
-          showToast("Relatório baixado!", "success");
+          showToast("Download iniciado!", "success");
         } catch (saveErr) {
-          // Último recurso: Abrir em nova aba
           const pdfUrl = URL.createObjectURL(pdfBlob);
           window.open(pdfUrl, '_blank');
           showToast("Relatório aberto em nova aba", "info");
         }
       }
     } catch (err: any) {
-      console.error("Erro ao compartilhar:", err);
-      const errorMsg = err?.message || "Erro desconhecido";
-      showToast(`Erro: ${errorMsg}`, "error");
+      console.error("Erro ao gerar PDF:", err);
+      showToast(`Erro: ${err.message || "Falha técnica"}`, "error");
     } finally {
       setIsGeneratingPDF(false);
     }
@@ -1648,7 +1704,15 @@ const App: React.FC = () => {
                   ) : (
                     <Share2 size={18} />
                   )}
-                  {isGeneratingPDF ? 'Gerando PDF...' : 'Compartilhar PDF'}
+                  {isGeneratingPDF ? 'Gerando...' : 'Compartilhar'}
+                </button>
+                <button 
+                  onClick={handleDownloadOnly}
+                  disabled={isGeneratingPDF}
+                  className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 active:scale-95 transition-all text-slate-400 disabled:opacity-50"
+                  title="Baixar PDF"
+                >
+                  <Printer size={20} />
                 </button>
               </div>
             </div>
@@ -1658,7 +1722,7 @@ const App: React.FC = () => {
               <div className="p-10 text-white relative overflow-hidden print:bg-emerald-900 print:text-white" style={{ backgroundColor: '#064e3b' }}>
                 <div className="absolute top-0 right-0 w-40 h-40 rounded-full -mr-20 -mt-20 blur-3xl print:hidden" style={{ backgroundColor: 'rgba(16, 185, 129, 0.2)' }} />
                 <div className="flex items-center gap-4 mb-6">
-                  <div className="p-3 rounded-2xl backdrop-blur-md border border-emerald-400/20" style={{ backgroundColor: 'rgba(52, 211, 153, 0.2)', borderColor: 'rgba(52, 211, 153, 0.2)' }}>
+                  <div className="p-3 rounded-2xl border border-emerald-400/20" style={{ backgroundColor: 'rgba(52, 211, 153, 0.2)', borderColor: 'rgba(52, 211, 153, 0.2)' }}>
                     <ShieldCheck size={24} style={{ color: '#34d399' }} />
                   </div>
                   <div>
