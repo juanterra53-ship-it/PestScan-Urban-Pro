@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { 
   Bug, Camera, BookOpen, History, 
@@ -9,8 +9,21 @@ import {
   User, Lock, Mail, LogOut, CheckCircle,
   Database, ShieldCheck, Zap, ZapOff,
   Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw, Printer,
-  ChevronDown, ChevronUp, Activity, AlertCircle, Share2
+  ChevronDown, ChevronUp, Activity, AlertCircle, Share2, Map as MapIcon
 } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, FeatureGroup } from 'react-leaflet';
+import L from 'leaflet';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import 'leaflet/dist/leaflet.css';
+
+// Fix Leaflet icon issue
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
 import { toPng } from 'html-to-image';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
@@ -39,8 +52,53 @@ const normalizeString = (str: string) =>
      .replace(/[^a-z0-9]/g, "")
      .trim();
 
+const MapViewUpdater: React.FC<{ center: [number, number] }> = ({ center }) => {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center, map.getZoom());
+  }, [center, map]);
+  return null;
+};
+
+// Error Boundary Component
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Map Error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-50 rounded-[2.5rem] p-8 text-center border-2 border-dashed border-slate-200">
+          <AlertCircle size={48} className="text-amber-500 mb-4" />
+          <h3 className="text-slate-900 font-black uppercase tracking-tight mb-2">Erro ao Carregar Mapa</h3>
+          <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest max-w-[200px]">
+            Houve um problema ao renderizar o mapa. Tente recarregar a página.
+          </p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="mt-6 px-6 py-3 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+          >
+            Recarregar App
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const App: React.FC = () => {
-  const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail' | 'privacy' | 'report' | 'report-setup'>('splash');
+  const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail' | 'privacy' | 'report' | 'report-setup' | 'map'>('splash');
   const [loading, setLoading] = useState(false);
   const [currentResult, setCurrentResult] = useState<RecognitionResult | null>(null);
   const [selectedPest, setSelectedPest] = useState<PestInfo | null>(null);
@@ -85,6 +143,49 @@ const App: React.FC = () => {
   const [normMode, setNormMode] = useState(2);
 
   const [showSkip, setShowSkip] = useState(false);
+  const lastLocRef = useRef<{lat: number, lon: number}>({lat: 0, lon: 0});
+
+  const userIcon = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    return L.divIcon({
+      className: 'custom-user-marker',
+      html: `
+        <div style="position: relative; width: 20px; height: 20px;">
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 12px; height: 12px; background-color: #3b82f6; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 10px rgba(59, 130, 246, 0.5); z-index: 2;"></div>
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 12px; height: 12px; background-color: #3b82f6; border-radius: 50%; animation: pulse 2s infinite; z-index: 1;"></div>
+        </div>
+      `,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10]
+    });
+  }, []);
+
+  // Real-time location tracking
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        const dist = Math.sqrt(Math.pow(latitude - lastLocRef.current.lat, 2) + Math.pow(longitude - lastLocRef.current.lon, 2));
+        
+        if (dist > 0.0001 || !location) {
+          lastLocRef.current = { lat: latitude, lon: longitude };
+          try {
+            const address = await getReverseGeocoding(latitude, longitude);
+            setLocation({ lat: latitude, lon: longitude, address });
+          } catch (e) {
+            console.error("Erro ao obter endereço:", e);
+            setLocation(prev => prev ? { ...prev, lat: latitude, lon: longitude } : { lat: latitude, lon: longitude, address: "Localização Atual" });
+          }
+        }
+      },
+      (error) => console.error("Erro ao rastrear localização:", error),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
 
   // Monitoramento do modelo local
   useEffect(() => {
@@ -249,6 +350,12 @@ const App: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (view === 'map') {
+      fetchHistory();
+    }
+  }, [view]);
+
   const fetchHistory = async () => {
     if (!user) return;
     try {
@@ -267,13 +374,23 @@ const App: React.FC = () => {
       if (error) throw error;
       
         if (data) {
-          setHistory(data.map((item: any) => ({ 
-            id: item.id, 
-            timestamp: new Date(item.created_at).getTime(), 
-            image: item.image_data, 
-            result: item.analysis_result,
-            location: item.location_name
-          })));
+          setHistory(data.map((item: any) => {
+            let result = item.analysis_result;
+            if (typeof result === 'string') {
+              try {
+                result = JSON.parse(result);
+              } catch (e) {
+                console.error("Erro ao parsear analysis_result:", e);
+              }
+            }
+            return { 
+              id: item.id, 
+              timestamp: new Date(item.created_at).getTime(), 
+              image: item.image_data, 
+              result: result,
+              location: item.location_name
+            };
+          }));
         }
       } catch (err) { 
         console.error("Erro ao carregar histórico:", err); 
@@ -291,6 +408,7 @@ const App: React.FC = () => {
       return;
     }
     
+    showToast("Gerando PDF... Aguarde.", "info");
     setIsGeneratingPDF(true);
     try {
       const element = reportRef.current;
@@ -358,10 +476,12 @@ const App: React.FC = () => {
     
     const isAndroidApp = /Android/i.test(navigator.userAgent);
     if (isAndroidApp) {
+      showToast("Use a opção 'Baixar PDF' em vez de compartilhar.", "info");
       handleDownloadOnly();
       return;
     }
 
+    showToast("Gerando PDF para compartilhar...", "info");
     setIsGeneratingPDF(true);
     try {
       const element = reportRef.current;
@@ -1241,6 +1361,15 @@ const App: React.FC = () => {
                 <LogOut size={20} className="text-white/80" />
               </button>
             )}
+            {user && (
+              <button 
+                onClick={() => { setView('map'); stopCamera(); }}
+                className={`p-3 rounded-2xl transition-all border ${view === 'map' ? 'bg-emerald-500 border-emerald-400 shadow-lg shadow-emerald-500/20' : 'bg-white/5 hover:bg-white/10 border-white/10'}`}
+                title="Mapa de Calor"
+              >
+                <MapIcon size={20} className={view === 'map' ? 'text-white' : 'text-white/80'} />
+              </button>
+            )}
             {view !== 'main' && (
               <button 
                 onClick={() => { setView('main'); stopCamera(); setError(null); }} 
@@ -1366,6 +1495,182 @@ const App: React.FC = () => {
              <p className="mt-10 text-sm font-bold text-slate-400 px-10 text-center leading-relaxed uppercase tracking-widest text-[10px]">
                Posicione a praga no centro do visor
              </p>
+          </div>
+        )}
+
+        {view === 'map' && (
+          <div className="space-y-8 animate-in fade-in pb-12">
+            <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => fetchHistory()}
+                    className="p-3 bg-slate-50 hover:bg-slate-100 rounded-2xl transition-colors border border-slate-100 text-slate-400"
+                    title="Atualizar Dados"
+                  >
+                    <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+                  </button>
+                  <div className="bg-emerald-500 p-3 rounded-2xl text-white shadow-lg shadow-emerald-500/20">
+                    <MapIcon size={24} />
+                  </div>
+                </div>
+                <div>
+                  <h3 className="text-emerald-900 font-black text-sm uppercase tracking-tight">Mapa de Calor</h3>
+                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Focos de Infestação em Tempo Real</p>
+                </div>
+              </div>
+
+              <div className="w-full h-[400px] rounded-[2.5rem] overflow-hidden border-4 border-slate-50 shadow-inner relative z-10">
+                <ErrorBoundary>
+                  <MapContainer 
+                    center={location ? [location.lat, location.lon] : [-23.5505, -46.6333]} 
+                    zoom={13} 
+                    style={{ height: '100%', width: '100%' }}
+                    scrollWheelZoom={false}
+                  >
+                    {location && <MapViewUpdater center={[location.lat, location.lon]} />}
+                    <TileLayer
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    />
+                    {location && (
+                      <Marker position={[location.lat, location.lon]} icon={userIcon || undefined}>
+                        <Popup>
+                          <div className="text-center p-1">
+                            <p className="font-black text-[10px] uppercase text-emerald-600">Sua Posição</p>
+                            <p className="text-[9px] font-bold text-slate-400">{location.address}</p>
+                          </div>
+                        </Popup>
+                      </Marker>
+                    )}
+                    {history.filter(h => h.result.location?.latitude).map(entry => (
+                      <FeatureGroup key={entry.id}>
+                        {/* Heatmap simulation with multiple circles */}
+                        <Circle 
+                          center={[entry.result.location!.latitude, entry.result.location!.longitude]}
+                          radius={400}
+                          pathOptions={{ 
+                            fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
+                            fillOpacity: 0.1,
+                            color: 'transparent'
+                          }}
+                        />
+                        <Circle 
+                          center={[entry.result.location!.latitude, entry.result.location!.longitude]}
+                          radius={200}
+                          pathOptions={{ 
+                            fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
+                            fillOpacity: 0.2,
+                            color: 'transparent'
+                          }}
+                        />
+                        <Circle 
+                          center={[entry.result.location!.latitude, entry.result.location!.longitude]}
+                          radius={100}
+                          pathOptions={{ 
+                            fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
+                            fillOpacity: 0.3,
+                            color: 'transparent'
+                          }}
+                        />
+                        <Marker position={[entry.result.location!.latitude, entry.result.location!.longitude]}>
+                          <Popup>
+                            <div className="w-40 p-1">
+                              <img src={entry.image} className="w-full h-24 object-cover rounded-xl mb-2" />
+                              <p className="font-black text-xs text-slate-900 uppercase leading-none mb-1">{entry.result.pest?.name || 'Scan'}</p>
+                              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                                {new Date(entry.timestamp).toLocaleDateString()} - {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                  <div className="h-full bg-emerald-500" style={{ width: `${entry.result.confidence * 100}%` }} />
+                                </div>
+                                <span className="text-[9px] font-black text-emerald-600">{(entry.result.confidence * 100).toFixed(0)}%</span>
+                              </div>
+                            </div>
+                          </Popup>
+                        </Marker>
+                      </FeatureGroup>
+                    ))}
+                  </MapContainer>
+                </ErrorBoundary>
+              </div>
+            </div>
+
+            <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
+              <div className="flex items-center gap-4 mb-8">
+                <div className="bg-amber-500 p-3 rounded-2xl text-white shadow-lg shadow-amber-500/20">
+                  <Activity size={24} />
+                </div>
+                <div>
+                  <h3 className="text-slate-900 font-black text-sm uppercase tracking-tight">Análise de Infestação</h3>
+                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Regiões com Maior Incidência</p>
+                </div>
+              </div>
+
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={(() => {
+                    const counts: Record<string, number> = {};
+                    history.forEach(h => {
+                      const region = h.location?.split(',')[0] || 'Desconhecido';
+                      counts[region] = (counts[region] || 0) + 1;
+                    });
+                    return Object.entries(counts)
+                      .map(([name, value]) => ({ name, value }))
+                      .sort((a, b) => b.value - a.value)
+                      .slice(0, 5);
+                  })()}>
+                    <XAxis 
+                      dataKey="name" 
+                      axisLine={false} 
+                      tickLine={false} 
+                      tick={{ fontSize: 9, fontWeight: 900, fill: '#94a3b8' }} 
+                    />
+                    <YAxis hide />
+                    <Tooltip 
+                      cursor={{ fill: '#f8fafc' }}
+                      content={({ active, payload }) => {
+                        if (active && payload && payload.length) {
+                          return (
+                            <div className="bg-slate-900 text-white p-3 rounded-xl shadow-xl border border-slate-800">
+                              <p className="text-[9px] font-black uppercase tracking-widest mb-1">{payload[0].payload.name}</p>
+                              <p className="text-xs font-black">{payload[0].value} Ocorrências</p>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    <Bar dataKey="value" radius={[10, 10, 10, 10]} barSize={30}>
+                      {history.map((_, index) => (
+                        <Cell key={`cell-${index}`} fill={index === 0 ? '#10b981' : '#e2e8f0'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="mt-8 grid grid-cols-2 gap-4">
+                <div className="p-5 bg-slate-50 rounded-[2rem] border border-slate-100">
+                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Total de Scans</p>
+                  <p className="text-xl font-black text-slate-900">{history.length}</p>
+                </div>
+                <div className="p-5 bg-emerald-50 rounded-[2rem] border border-emerald-100">
+                  <p className="text-[8px] font-black text-emerald-400 uppercase tracking-widest mb-1">Focos Ativos</p>
+                  <p className="text-xl font-black text-emerald-600">
+                    {history.filter(h => h.result.confidence > 0.9).length}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <button 
+              onClick={() => setView('main')}
+              className="w-full py-6 bg-slate-900 text-white rounded-[2.5rem] font-black text-sm uppercase shadow-2xl active:scale-95 transition-all"
+            >
+              Voltar ao Guia
+            </button>
           </div>
         )}
 
