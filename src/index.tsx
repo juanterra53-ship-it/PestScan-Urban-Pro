@@ -304,24 +304,31 @@ const App: React.FC = () => {
       }
 
       // Aguarda um pouco para garantir que as imagens (mapa, etc) carreguem
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 1000));
 
       let dataUrl;
       try {
         console.log("📸 [PDF] Iniciando captura com html-to-image...");
+        
+        // Detectar se é mobile para reduzir carga
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        
         dataUrl = await toJpeg(element, {
-          quality: 0.85,
+          quality: 0.8,
           backgroundColor: '#ffffff',
-          pixelRatio: 1.5,
+          pixelRatio: isMobile ? 1 : 1.5, // Reduz resolução no mobile para evitar crash
           cacheBust: true,
+          skipFonts: false,
           style: {
             borderRadius: '0',
             boxShadow: 'none',
+            margin: '0',
+            padding: '0'
           }
         });
       } catch (err: any) {
         console.error("❌ [PDF] Erro no html-to-image:", err);
-        throw new Error("Falha ao processar as imagens do relatório.");
+        throw new Error("Falha ao processar as imagens do relatório. Verifique sua conexão.");
       }
       
       if (!dataUrl) {
@@ -357,31 +364,34 @@ const App: React.FC = () => {
 
         if (canShareFiles) {
           await navigator.share(shareData);
+          showToast("Relatório compartilhado!", "success");
         } else if (typeof navigator.share === 'function') {
+          // Fallback para compartilhar apenas texto/link e baixar o arquivo
           await navigator.share({
             title: shareData.title,
             text: shareData.text,
-            url: window.location.origin
+            url: window.location.href
           });
           pdf.save(fileName);
-          showToast("PDF baixado e link compartilhado!", "success");
+          showToast("PDF baixado!", "success");
         } else {
-          await navigator.clipboard.writeText(`${shareData.title}\n${shareData.text}\n${window.location.origin}`);
+          // Fallback para download direto
           pdf.save(fileName);
-          showToast("Link copiado e PDF baixado!", "success");
+          showToast("Relatório baixado com sucesso!", "success");
         }
       } catch (shareErr: any) {
         if (shareErr.name === 'AbortError') return;
         
         console.error("Erro no navigator.share:", shareErr);
-        // Fallback final
+        // Fallback final: Download direto
         try {
-          await navigator.clipboard.writeText(`${shareData.title}\n${shareData.text}\n${window.location.origin}`);
           pdf.save(fileName);
-          showToast("Link copiado e PDF baixado!", "success");
-        } catch (clipErr) {
-          pdf.save(fileName);
-          showToast("PDF baixado com sucesso!", "success");
+          showToast("Relatório baixado!", "success");
+        } catch (saveErr) {
+          // Último recurso: Abrir em nova aba
+          const pdfUrl = URL.createObjectURL(pdfBlob);
+          window.open(pdfUrl, '_blank');
+          showToast("Relatório aberto em nova aba", "info");
         }
       }
     } catch (err: any) {
