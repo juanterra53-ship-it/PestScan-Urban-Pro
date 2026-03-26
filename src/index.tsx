@@ -11,7 +11,7 @@ import {
   Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw, Printer,
   ChevronDown, ChevronUp, Activity, AlertCircle, Share2, Map as MapIcon
 } from 'lucide-react';
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, FeatureGroup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Circle, CircleMarker, useMap, FeatureGroup } from 'react-leaflet';
 import L from 'leaflet';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import 'leaflet/dist/leaflet.css';
@@ -52,10 +52,14 @@ const normalizeString = (str: string) =>
      .replace(/[^a-z0-9]/g, "")
      .trim();
 
+const isValidCoord = (val: any) => typeof val === 'number' && !isNaN(val);
+
 const MapViewUpdater: React.FC<{ center: [number, number] }> = ({ center }) => {
   const map = useMap();
   useEffect(() => {
-    map.setView(center, map.getZoom());
+    if (center && isValidCoord(center[0]) && isValidCoord(center[1])) {
+      map.setView(center, map.getZoom());
+    }
   }, [center, map]);
   return null;
 };
@@ -99,6 +103,8 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 const App: React.FC = () => {
   const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail' | 'privacy' | 'report' | 'report-setup' | 'map'>('splash');
+  const viewRef = useRef(view);
+  useEffect(() => { viewRef.current = view; }, [view]);
   const [loading, setLoading] = useState(false);
   const [currentResult, setCurrentResult] = useState<RecognitionResult | null>(null);
   const [selectedPest, setSelectedPest] = useState<PestInfo | null>(null);
@@ -141,6 +147,8 @@ const App: React.FC = () => {
   const [isModelReady, setIsModelReady] = useState(isLocalModelLoaded());
   const [modelStatus, setModelStatus] = useState(getModelStatus());
   const [normMode, setNormMode] = useState(2);
+  const [mapKey, setMapKey] = useState(0);
+  const [isFetching, setIsFetching] = useState(false);
 
   const [showSkip, setShowSkip] = useState(false);
   const lastLocRef = useRef<{lat: number, lon: number}>({lat: 0, lon: 0});
@@ -356,9 +364,55 @@ const App: React.FC = () => {
     }
   }, [view]);
 
-  const fetchHistory = async () => {
+  // Real-time subscription for pest detections
+  useEffect(() => {
     if (!user) return;
+
+    const channel = supabase
+      .channel('realtime-pest-detections')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'pest_detections',
+        },
+        (payload: any) => {
+          console.log('Nova detecção em tempo real:', payload);
+          fetchHistory();
+          // Only show toast if it's not the current user's detection to avoid double notification
+          if (payload.new.user_id !== user.id) {
+            showToast(`Nova praga detectada: ${payload.new.pest_name}`, "info");
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
+  const pestIcon = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    return L.divIcon({
+      className: 'custom-pest-marker',
+      html: `
+        <div style="position: relative; width: 24px; height: 24px;">
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background-color: #ef4444; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); z-index: 2;"></div>
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background-color: #ef4444; border-radius: 50%; animation: pulse 2s infinite; z-index: 1;"></div>
+        </div>
+      `,
+      iconSize: [24, 24],
+      iconAnchor: [12, 12]
+    });
+  }, []);
+
+  const fetchHistory = async (force = false) => {
+    if (!user || (isFetching && !force)) return;
+    setIsFetching(true);
     try {
+      console.log("[History] Iniciando busca de registros...");
       let query = supabase
         .from('pest_detections')
         .select('*')
@@ -373,29 +427,54 @@ const App: React.FC = () => {
       const { data, error } = await query;
       if (error) throw error;
       
-        if (data) {
-          setHistory(data.map((item: any) => {
-            let result = item.analysis_result;
-            if (typeof result === 'string') {
-              try {
-                result = JSON.parse(result);
-              } catch (e) {
-                console.error("Erro ao parsear analysis_result:", e);
-              }
-            }
-            return { 
-              id: item.id, 
-              timestamp: new Date(item.created_at).getTime(), 
-              image: item.image_data, 
-              result: result,
-              location: item.location_name
+      if (data) {
+        const mappedHistory = data.map((item: any) => {
+          let result = item.analysis_result;
+          if (typeof result === 'string') {
+            try { result = JSON.parse(result); } catch (e) { console.error("[History] Erro parse:", e); }
+          }
+          
+          if (!result || typeof result !== 'object') {
+            result = { pestFound: false, confidence: 0 };
+          }
+
+          const dbLat = item.latitude !== null ? Number(item.latitude) : NaN;
+          const dbLon = item.longitude !== null ? Number(item.longitude) : NaN;
+
+          if (isValidCoord(dbLat) && isValidCoord(dbLon)) {
+            result.location = {
+              latitude: dbLat,
+              longitude: dbLon,
+              address: item.location_name || result.location?.address || "Localização não disponível"
             };
-          }));
-        }
-      } catch (err) { 
-        console.error("Erro ao carregar histórico:", err); 
+          }
+
+          return { 
+            id: item.id, 
+            timestamp: new Date(item.created_at).getTime(), 
+            image: item.image_data, 
+            result: result,
+            location: item.location_name
+          };
+        });
+        
+        // Só atualiza se houver mudança real ou se for forçado
+        setHistory(prev => {
+          const hasChanged = JSON.stringify(prev) !== JSON.stringify(mappedHistory);
+          if (hasChanged || force) {
+            console.log("[History] Atualizando estado e forçando re-render do mapa");
+            setMapKey(k => k + 1);
+            return mappedHistory;
+          }
+          return prev;
+        });
       }
-    };
+    } catch (err) { 
+      console.error("Erro ao carregar histórico:", err); 
+    } finally {
+      setIsFetching(false);
+    }
+  };
   
     const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
@@ -404,66 +483,103 @@ const App: React.FC = () => {
 
   const handleDownloadOnly = async () => {
     if (!currentResult || !currentResult.pest || !reportRef.current) {
-      showToast("Relatório não pronto.", "error");
+      showToast("Relatório não pronto. Tente novamente.", "error");
       return;
     }
     
-    showToast("Gerando PDF... Aguarde.", "info");
+    showToast("Gerando PDF profissional...", "info");
     setIsGeneratingPDF(true);
+    
+    const originalStyle = {
+      width: reportRef.current.style.width,
+      maxWidth: reportRef.current.style.maxWidth,
+      position: reportRef.current.style.position,
+      left: reportRef.current.style.left,
+      top: reportRef.current.style.top,
+      zIndex: reportRef.current.style.zIndex,
+      backgroundColor: reportRef.current.style.backgroundColor
+    };
+
     try {
       const element = reportRef.current;
-      await new Promise(r => setTimeout(r, 500));
       
-      let dataUrl;
+      // Força renderização de alta qualidade (largura fixa de desktop)
+      element.style.width = '1024px';
+      element.style.maxWidth = 'none';
+      element.style.position = 'fixed';
+      element.style.left = '-10000px';
+      element.style.top = '0';
+      element.style.zIndex = '-1';
+      element.style.backgroundColor = '#ffffff';
+      
+      await new Promise(r => setTimeout(r, 2000));
+      
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
+      let canvas;
       try {
-        dataUrl = await toPng(element, {
-          quality: 0.6,
+        // Tenta html2canvas primeiro com configurações de alta fidelidade
+        canvas = await html2canvas(element, {
+          useCORS: true,
+          allowTaint: true,
+          scale: 2,
           backgroundColor: '#ffffff',
-          pixelRatio: isMobile ? 1.5 : 2,
-          cacheBust: true,
-          skipFonts: false,
+          logging: false,
+          width: 1024,
+          onclone: (clonedDoc) => {
+            const el = clonedDoc.querySelector('[data-report-container]');
+            if (el) (el as HTMLElement).style.display = 'block';
+          }
         });
       } catch (e) {
-        const canvas = await html2canvas(element, {
-          useCORS: true,
-          scale: isMobile ? 1.5 : 2,
+        console.warn("html2canvas falhou, tentando toPng:", e);
+        const dataUrl = await toPng(element, {
+          quality: 0.95,
           backgroundColor: '#ffffff',
-          logging: false
+          pixelRatio: 2,
+          cacheBust: true,
         });
-        dataUrl = canvas.toDataURL('image/png');
+        const img = new Image();
+        img.src = dataUrl;
+        await new Promise(r => img.onload = r);
+        canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        canvas.getContext('2d')?.drawImage(img, 0, 0);
       }
-
-      if (!dataUrl) throw new Error("Falha ao capturar imagem.");
 
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'px',
-        format: [element.offsetWidth, element.offsetHeight]
+        format: [canvas.width, canvas.height]
       });
-      
-      pdf.addImage(dataUrl, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
+
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, canvas.width, canvas.height, undefined, 'FAST');
       
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
-      const isAndroidApp = /Android/i.test(navigator.userAgent);
-
-      if (isAndroidApp) {
-        const pdfBase64 = pdf.output('datauristring');
-        const link = document.createElement('a');
-        link.href = pdfBase64;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
+      
+      // Método de download mais robusto para mobile/iframes
+      const pdfBlob = pdf.output('blob');
+      const url = URL.createObjectURL(pdfBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      
+      setTimeout(() => {
         document.body.removeChild(link);
-      } else {
-        pdf.save(fileName);
-        showToast("Download concluído!", "success");
-      }
-    } catch (err: any) {
-      console.error("Erro no download:", err);
-      showToast("Erro ao gerar PDF.", "error");
+        URL.revokeObjectURL(url);
+      }, 1000);
+
+      showToast("Download concluído!", "success");
+    } catch (e) {
+      console.error("Erro PDF:", e);
+      showToast("Falha ao gerar PDF. Tente novamente.", "error");
     } finally {
+      if (reportRef.current) {
+        Object.assign(reportRef.current.style, originalStyle);
+      }
       setIsGeneratingPDF(false);
     }
   };
@@ -474,45 +590,63 @@ const App: React.FC = () => {
       return;
     }
     
-    const isAndroidApp = /Android/i.test(navigator.userAgent);
-    if (isAndroidApp) {
-      showToast("Use a opção 'Baixar PDF' em vez de compartilhar.", "info");
-      handleDownloadOnly();
-      return;
-    }
-
     showToast("Gerando PDF para compartilhar...", "info");
     setIsGeneratingPDF(true);
     try {
       const element = reportRef.current;
-      await new Promise(r => setTimeout(r, 500));
+      element.scrollIntoView();
+      await new Promise(r => setTimeout(r, 1000));
 
-      let dataUrl;
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
+      let canvas;
       try {
-        dataUrl = await toPng(element, {
-          quality: 0.6,
+        canvas = await html2canvas(element, {
+          useCORS: true,
+          allowTaint: true,
+          scale: isMobile ? 1.0 : 1.5,
           backgroundColor: '#ffffff',
-          pixelRatio: isMobile ? 1.5 : 2,
-          cacheBust: true,
+          logging: false,
+          windowWidth: element.scrollWidth,
+          windowHeight: element.scrollHeight,
+          onclone: (clonedDoc) => {
+            const el = clonedDoc.getElementById('report-content');
+            if (el) el.style.display = 'block';
+          }
         });
       } catch (e) {
-        const canvas = await html2canvas(element, {
-          useCORS: true,
-          scale: isMobile ? 1.5 : 2,
+        console.warn("html2canvas falhou no share, tentando toPng:", e);
+        const dataUrl = await toPng(element, {
+          quality: 0.7,
           backgroundColor: '#ffffff',
+          pixelRatio: isMobile ? 1.0 : 1.5,
+          cacheBust: true,
+          skipFonts: false,
         });
-        dataUrl = canvas.toDataURL('image/png');
+        
+        if (!dataUrl || dataUrl === 'data:,') throw new Error("Falha ao capturar imagem.");
+        
+        canvas = await new Promise<HTMLCanvasElement>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            const c = document.createElement('canvas');
+            c.width = img.width;
+            c.height = img.height;
+            c.getContext('2d')?.drawImage(img, 0, 0);
+            resolve(c);
+          };
+          img.onerror = reject;
+          img.src = dataUrl;
+        });
       }
-      
+
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'px',
         format: [element.offsetWidth, element.offsetHeight]
       });
       
-      pdf.addImage(dataUrl, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
+      pdf.addImage(canvas, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
       
       const pdfBlob = pdf.output('blob');
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
@@ -521,15 +655,26 @@ const App: React.FC = () => {
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
         await navigator.share({
           title: 'Relatório PestScan Pro',
-          text: 'Confira o relatório de inspeção.',
+          text: `Confira a identificação da praga: ${currentResult.pest.name}`,
           files: [pdfFile]
         });
+        showToast("Compartilhado com sucesso!", "success");
       } else {
-        handleDownloadOnly();
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, 500);
+        showToast("Download iniciado (Compartilhamento não suportado)", "info");
       }
     } catch (err: any) {
       console.error("Erro ao compartilhar:", err);
-      handleDownloadOnly();
+      showToast(`Erro ao gerar PDF: ${err.message || 'Tente novamente'}`, "error");
     } finally {
       setIsGeneratingPDF(false);
     }
@@ -622,6 +767,11 @@ const App: React.FC = () => {
     setHasFlash(false); 
     setFlashOn(false);
 
+    if (!window.isSecureContext) {
+      setError("A câmera requer uma conexão segura (HTTPS).");
+      return;
+    }
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setError("Câmera não suportada neste dispositivo.");
       return;
@@ -636,19 +786,51 @@ const App: React.FC = () => {
         } 
       });
       
+      // Se a view mudou enquanto esperávamos pela permissão, paramos o stream imediatamente
+      if (viewRef.current !== 'camera') {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        try {
+          await videoRef.current.play();
+        } catch (playError: any) {
+          // Ignora o erro de interrupção (AbortError) que ocorre quando o componente é desmontado
+          // ou a câmera é parada antes do play() completar.
+          if (playError.name !== 'AbortError') {
+            throw playError;
+          }
+        }
         
+        // Verifica novamente se ainda estamos na view da câmera antes de prosseguir com as capacidades
+        if (viewRef.current !== 'camera') return;
+
         const track = stream.getVideoTracks()[0];
         const caps = (track as any).getCapabilities?.() || {};
         if (caps.torch) setHasFlash(true);
         if (caps.zoom) setZoomCaps({ min: caps.zoom.min, max: caps.zoom.max });
       }
     } catch (e: any) { 
-      console.error("Erro câmera:", e);
-      setError("Não foi possível acessar a câmera. Verifique as permissões.");
+      // Se o erro for AbortError, não mostramos erro na UI pois é uma ação esperada de cancelamento
+      if (e.name !== 'AbortError') {
+        console.error("Erro câmera:", e);
+        
+        let errorMsg = "Não foi possível acessar a câmera.";
+        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError' || e.message?.includes("Permission denied")) {
+          errorMsg = "Permissão da câmera negada. Por favor, autorize o acesso nas configurações do seu navegador ou do dispositivo para continuar.";
+        } else if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
+          errorMsg = "Nenhuma câmera encontrada neste dispositivo.";
+        } else if (e.name === 'NotReadableError' || e.name === 'TrackStartError') {
+          errorMsg = "A câmera está sendo usada por outro aplicativo ou aba.";
+        } else {
+          errorMsg = `Erro ao acessar câmera: ${e.message || 'Verifique as permissões'}`;
+        }
+        
+        setError(errorMsg);
+      }
     }
   }, []);
 
@@ -677,7 +859,7 @@ const App: React.FC = () => {
     setLoading(true); setError(null);
     try {
       // CAPTURA DE LOCALIZAÇÃO (EM PARALELO - NÃO BLOQUEIA O INÍCIO DA ANÁLISE)
-      let locData = { lat: 0, lon: 0, address: "Localização não disponível" };
+      let locData = location ? { lat: location.lat, lon: location.lon, address: location.address } : { lat: 0, lon: 0, address: "Localização não disponível" };
       const locationPromise = (async () => {
         try {
           const pos = await getGeolocation();
@@ -686,7 +868,7 @@ const App: React.FC = () => {
           const address = await getReverseGeocoding(lat, lon);
           return { lat, lon, address };
         } catch (locErr) {
-          console.warn("Erro ao obter localização:", locErr);
+          console.warn("Erro ao obter localização em tempo real, usando fallback:", locErr);
           return locData;
         }
       })();
@@ -758,8 +940,12 @@ const App: React.FC = () => {
 
       // Aguarda a localização (se ainda não terminou)
       const finalLoc = await locationPromise;
-      res.location = { latitude: finalLoc.lat, longitude: finalLoc.lon, address: finalLoc.address };
-      setLocation(finalLoc);
+      const lat = isValidCoord(finalLoc.lat) ? finalLoc.lat : (location?.lat || 0);
+      const lon = isValidCoord(finalLoc.lon) ? finalLoc.lon : (location?.lon || 0);
+      const validatedLoc = { lat, lon, address: finalLoc.address || location?.address || "Localização não disponível" };
+      
+      res.location = { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address };
+      setLocation(validatedLoc);
 
       const resultWithImage = { ...res, capturedImage: dataUrl };
       setCurrentResult(resultWithImage);
@@ -787,6 +973,14 @@ const App: React.FC = () => {
           } catch (uploadErr) {
             console.warn("Upload falhou:", uploadErr);
           }
+
+          console.log("[History] Salvando captura no banco:", { 
+            user_id: user.id, 
+            pest_name: res.pest?.name || 'Scan', 
+            lat: finalLoc.lat, 
+            lon: finalLoc.lon,
+            address: finalLoc.address
+          });
 
           await supabase.from('pest_detections').insert({ 
             user_id: user.id, 
@@ -820,7 +1014,7 @@ const App: React.FC = () => {
     
     try {
       // CAPTURA DE LOCALIZAÇÃO (EM PARALELO)
-      let locData = { lat: 0, lon: 0, address: "Localização não disponível" };
+      let locData = location ? { lat: location.lat, lon: location.lon, address: location.address } : { lat: 0, lon: 0, address: "Localização não disponível" };
       const locationPromise = (async () => {
         try {
           const pos = await getGeolocation();
@@ -829,7 +1023,7 @@ const App: React.FC = () => {
           const address = await getReverseGeocoding(lat, lon);
           return { lat, lon, address };
         } catch (locErr) {
-          console.warn("Erro ao obter localização:", locErr);
+          console.warn("Erro ao obter localização no upload, usando fallback:", locErr);
           return locData;
         }
       })();
@@ -870,8 +1064,12 @@ const App: React.FC = () => {
 
       // Aguarda a localização
       const finalLoc = await locationPromise;
-      res.location = { latitude: finalLoc.lat, longitude: finalLoc.lon, address: finalLoc.address };
-      setLocation(finalLoc);
+      const lat = isValidCoord(finalLoc.lat) ? finalLoc.lat : 0;
+      const lon = isValidCoord(finalLoc.lon) ? finalLoc.lon : 0;
+      const validatedLoc = { lat, lon, address: finalLoc.address };
+
+      res.location = { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address };
+      setLocation(validatedLoc);
 
       // Limpeza de memória imediata
       imgElement.src = '';
@@ -926,6 +1124,14 @@ const App: React.FC = () => {
           } catch (uploadErr) {
             console.warn("Upload de arquivo falhou:", uploadErr);
           }
+
+          console.log("[History] Salvando arquivo no banco:", { 
+            user_id: user.id, 
+            pest_name: res.pest?.name || 'Scan', 
+            lat: finalLoc.lat, 
+            lon: finalLoc.lon,
+            address: finalLoc.address
+          });
 
           await supabase.from('pest_detections').insert({ 
             user_id: user.id, 
@@ -1396,6 +1602,15 @@ const App: React.FC = () => {
               <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
               <p className="text-xs leading-relaxed font-bold flex-1">{error}</p>
             </div>
+            {view === 'camera' && (
+              <button 
+                onClick={() => initCamera()}
+                className="flex items-center justify-center gap-2 px-6 py-3 bg-red-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all w-full"
+              >
+                <RefreshCw size={14} />
+                Tentar Novamente
+              </button>
+            )}
           </div>
         )}
         
@@ -1515,25 +1730,54 @@ const App: React.FC = () => {
                   </div>
                 </div>
                 <div>
-                  <h3 className="text-emerald-900 font-black text-sm uppercase tracking-tight">Mapa de Calor</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-emerald-900 font-black text-sm uppercase tracking-tight">Mapa de Calor</h3>
+                    <div className="flex items-center gap-1 bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/20">
+                      <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+                      <span className="text-[8px] font-black text-red-600 uppercase tracking-tighter">Live</span>
+                    </div>
+                  </div>
                   <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Focos de Infestação em Tempo Real</p>
                 </div>
               </div>
 
               <div className="w-full h-[400px] rounded-[2.5rem] overflow-hidden border-4 border-slate-50 shadow-inner relative z-10">
+                {/* Manual Refresh Button - Moved OUTSIDE MapContainer for better clickability */}
+                <div className="absolute top-4 right-4 z-[2000]">
+                  <button 
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      fetchHistory(true);
+                    }}
+                    disabled={isFetching}
+                    className="bg-white p-3 rounded-2xl shadow-xl hover:bg-slate-50 active:scale-95 transition-all border-2 border-slate-100 group disabled:opacity-50"
+                    title="Atualizar Mapa"
+                  >
+                    <RefreshCw className={`w-6 h-6 text-emerald-600 ${isFetching ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
+                  </button>
+                </div>
+
                 <ErrorBoundary>
                   <MapContainer 
-                    center={location ? [location.lat, location.lon] : [-23.5505, -46.6333]} 
+                    key={mapKey}
+                    center={
+                      location && isValidCoord(location.lat) && isValidCoord(location.lon) 
+                        ? [location.lat, location.lon] 
+                        : (history.length > 0 && history[0].result.location && isValidCoord(history[0].result.location.latitude))
+                          ? [history[0].result.location.latitude, history[0].result.location.longitude]
+                          : [-23.5505, -46.6333]
+                    } 
                     zoom={13} 
                     style={{ height: '100%', width: '100%' }}
                     scrollWheelZoom={false}
                   >
-                    {location && <MapViewUpdater center={[location.lat, location.lon]} />}
+                    {location && isValidCoord(location.lat) && isValidCoord(location.lon) && <MapViewUpdater center={[location.lat, location.lon]} />}
                     <TileLayer
                       attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                     />
-                    {location && (
+                    {location && isValidCoord(location.lat) && isValidCoord(location.lon) && (
                       <Marker position={[location.lat, location.lon]} icon={userIcon || undefined}>
                         <Popup>
                           <div className="text-center p-1">
@@ -1543,55 +1787,100 @@ const App: React.FC = () => {
                         </Popup>
                       </Marker>
                     )}
-                    {history.filter(h => h.result.location?.latitude).map(entry => (
-                      <FeatureGroup key={entry.id}>
-                        {/* Heatmap simulation with multiple circles */}
-                        <Circle 
-                          center={[entry.result.location!.latitude, entry.result.location!.longitude]}
-                          radius={400}
-                          pathOptions={{ 
-                            fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
-                            fillOpacity: 0.1,
-                            color: 'transparent'
-                          }}
-                        />
-                        <Circle 
-                          center={[entry.result.location!.latitude, entry.result.location!.longitude]}
-                          radius={200}
-                          pathOptions={{ 
-                            fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
-                            fillOpacity: 0.2,
-                            color: 'transparent'
-                          }}
-                        />
-                        <Circle 
-                          center={[entry.result.location!.latitude, entry.result.location!.longitude]}
-                          radius={100}
-                          pathOptions={{ 
-                            fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
-                            fillOpacity: 0.3,
-                            color: 'transparent'
-                          }}
-                        />
-                        <Marker position={[entry.result.location!.latitude, entry.result.location!.longitude]}>
-                          <Popup>
-                            <div className="w-40 p-1">
-                              <img src={entry.image} className="w-full h-24 object-cover rounded-xl mb-2" />
-                              <p className="font-black text-xs text-slate-900 uppercase leading-none mb-1">{entry.result.pest?.name || 'Scan'}</p>
-                              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">
-                                {new Date(entry.timestamp).toLocaleDateString()} - {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </p>
-                              <div className="flex items-center gap-2">
-                                <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                  <div className="h-full bg-emerald-500" style={{ width: `${entry.result.confidence * 100}%` }} />
+                    {(() => {
+                      const points = history.filter(h => 
+                        h.result && 
+                        h.result.location && 
+                        isValidCoord(h.result.location.latitude) && 
+                        isValidCoord(h.result.location.longitude)
+                      );
+                      
+                      if (points.length === 0) {
+                        console.log("[Map] Nenhum ponto válido para renderizar no histórico.");
+                        return null;
+                      }
+
+                      console.log(`[Map] Renderizando ${points.length} marcadores de pragas`);
+                      
+                      return points.map(entry => {
+                        const isNew = (Date.now() - new Date(entry.timestamp).getTime()) < 300000; // 5 minutes
+                        const lat = entry.result.location!.latitude;
+                        const lon = entry.result.location!.longitude;
+                        
+                        return (
+                          <React.Fragment key={entry.id}>
+                            {/* Heatmap simulation with multiple circles */}
+                            <Circle 
+                              center={[lat, lon]}
+                              radius={400}
+                              pathOptions={{ 
+                                fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillOpacity: 0.05,
+                                color: 'transparent'
+                              }}
+                            />
+                            <Circle 
+                              center={[lat, lon]}
+                              radius={200}
+                              pathOptions={{ 
+                                fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillOpacity: 0.1,
+                                color: 'transparent'
+                              }}
+                            />
+                            <Circle 
+                              center={[lat, lon]}
+                              radius={100}
+                              pathOptions={{ 
+                                fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillOpacity: 0.2,
+                                color: 'transparent'
+                              }}
+                            />
+                            
+                            {isNew && (
+                              <Circle 
+                                center={[lat, lon]}
+                                radius={50}
+                                pathOptions={{ 
+                                  fillColor: '#ef4444',
+                                  fillOpacity: 0.4,
+                                  color: '#ef4444',
+                                  weight: 1,
+                                  className: 'animate-pulse'
+                                }}
+                              />
+                            )}
+
+                            <Marker
+                              position={[lat, lon]}
+                              icon={pestIcon || undefined}
+                            >
+                              <Popup>
+                                <div className="w-40 p-1">
+                                  <img src={entry.image} className="w-full h-24 object-cover rounded-xl mb-2" />
+                                  <div className="flex items-center justify-between mb-1">
+                                    <p className="font-black text-xs text-slate-900 uppercase leading-none">{entry.result.pest?.name || 'Scan'}</p>
+                                    {isNew && (
+                                      <span className="bg-red-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase">Novo</span>
+                                    )}
+                                  </div>
+                                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                                    {new Date(entry.timestamp).toLocaleDateString()} - {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </p>
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                      <div className="h-full bg-emerald-500" style={{ width: `${entry.result.confidence * 100}%` }} />
+                                    </div>
+                                    <span className="text-[9px] font-black text-emerald-600">{(entry.result.confidence * 100).toFixed(0)}%</span>
+                                  </div>
                                 </div>
-                                <span className="text-[9px] font-black text-emerald-600">{(entry.result.confidence * 100).toFixed(0)}%</span>
-                              </div>
-                            </div>
-                          </Popup>
-                        </Marker>
-                      </FeatureGroup>
-                    ))}
+                              </Popup>
+                            </Marker>
+                          </React.Fragment>
+                        );
+                      });
+                    })()}
                   </MapContainer>
                 </ErrorBoundary>
               </div>
@@ -1778,13 +2067,7 @@ const App: React.FC = () => {
                     Gere um relatório técnico completo com fotos, geolocalização e recomendações biológicas para enviar via WhatsApp ou E-mail.
                   </p>
                   <button 
-                    onClick={() => {
-                      setLoading(true);
-                      setTimeout(() => {
-                        setLoading(false);
-                        setView('report-setup');
-                      }, 1000);
-                    }}
+                    onClick={() => setView('report-setup')}
                     className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 flex items-center justify-center gap-3 shadow-lg"
                   >
                     <Zap size={14} /> Gerar Relatório PDF
@@ -1977,7 +2260,7 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div id="report-content" ref={reportRef} className="rounded-[3rem] overflow-hidden shadow-2xl border border-slate-100 relative print:shadow-none print:border-none print:rounded-none" style={{ backgroundColor: '#ffffff' }}>
+            <div id="report-content" ref={reportRef} data-report-container="true" className="rounded-[3rem] overflow-hidden shadow-2xl border border-slate-100 relative print:shadow-none print:border-none print:rounded-none" style={{ backgroundColor: '#ffffff' }}>
               {/* Header do Relatório */}
               <div className="p-10 text-white relative overflow-hidden print:bg-emerald-900 print:text-white" style={{ backgroundColor: '#064e3b' }}>
                 <div className="absolute top-0 right-0 w-40 h-40 rounded-full -mr-20 -mt-20 blur-3xl print:hidden" style={{ backgroundColor: 'rgba(16, 185, 129, 0.2)' }} />
@@ -2025,7 +2308,7 @@ const App: React.FC = () => {
                       <Globe size={14} /> Mapa de Localização
                     </h3>
                     <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner relative group" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
-                      {currentResult.location?.latitude && currentResult.location?.longitude ? (
+                      {currentResult.location && isValidCoord(currentResult.location.latitude) && isValidCoord(currentResult.location.longitude) ? (
                         <>
                           <img 
                             src={`https://static-maps.yandex.ru/1.x/?lang=pt_BR&ll=${currentResult.location.longitude},${currentResult.location.latitude}&z=16&l=map&pt=${currentResult.location.longitude},${currentResult.location.latitude},pm2rdm`}
