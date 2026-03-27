@@ -15,6 +15,8 @@ export interface PestInfo {
   chemicalMeasures: string[]; // Medidas químicas específicas
   healthRisks: string;
   source?: string;
+  description?: string;
+  control?: string[];
 }
 
 export interface GroundingSource {
