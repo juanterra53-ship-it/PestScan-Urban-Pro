@@ -41,6 +41,12 @@ export interface RecognitionResult {
     longitude: number;
     address?: string;
   };
+  timestamp?: number;
+  observations?: string;
+  area?: string;
+  measures?: string;
+  batchResults?: RecognitionResult[];
+  id?: string;
 }
 
 export interface HistoryEntry {
@@ -49,6 +55,7 @@ export interface HistoryEntry {
   image: string;
   result: RecognitionResult;
   location?: string;
+  selected?: boolean;
 }
 
 export interface EncyclopediaItem {
