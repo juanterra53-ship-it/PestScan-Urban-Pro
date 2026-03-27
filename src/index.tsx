@@ -101,6 +101,73 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
+// Componente de Cartão Biológico (Movido para fora do App para evitar re-criação e flickering)
+const PestBioCard = ({ pest }: { pest: PestInfo }) => (
+  <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-6">
+     <div className="flex justify-between items-start">
+       <div className="flex-1 pr-4">
+         <h2 className="text-2xl font-black text-slate-900 leading-tight">{pest.name}</h2>
+         <p className="text-emerald-600 font-bold italic text-sm">{pest.scientificName}</p>
+         {(pest as any).maxScoreIndex !== undefined && (
+           <p className="text-[10px] text-slate-400 font-bold mt-1">DEBUG ID: {(pest as any).maxScoreIndex}</p>
+         )}
+         {pest.source && (
+           <div className="flex items-center gap-1 mt-1 opacity-50">
+             <Globe size={10} />
+             <span className="text-[9px] font-black uppercase tracking-wider">{pest.source}</span>
+           </div>
+         )}
+       </div>
+       <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase whitespace-nowrap ${
+         pest.riskLevel === 'Crítico' ? 'bg-red-100 text-red-600' : 
+         pest.riskLevel === 'Alto' ? 'bg-orange-100 text-orange-600' : 
+         'bg-emerald-100 text-emerald-600'
+       }`}>
+         Risco {pest.riskLevel}
+       </div>
+     </div>
+
+     <div className="grid grid-cols-2 gap-3">
+       <div className="bg-slate-50 p-3 rounded-2xl">
+         <p className="text-[10px] font-black text-slate-400 uppercase">Membros</p>
+         <p className="text-sm font-bold text-slate-700">{pest.members || 'N/A'}</p>
+       </div>
+       <div className="bg-slate-50 p-3 rounded-2xl">
+         <p className="text-[10px] font-black text-slate-400 uppercase">Reprodução</p>
+         <p className="text-sm font-bold text-slate-700 truncate">{pest.reproduction || 'N/A'}</p>
+       </div>
+     </div>
+
+     <div className="space-y-2">
+       <h4 className="text-xs font-black text-slate-400 uppercase flex items-center gap-2">
+         <Info size={14} /> Biologia e Hábitos
+       </h4>
+       <p className="text-sm text-slate-600 leading-relaxed">{pest.habits || pest.description}</p>
+     </div>
+
+     {pest.anatomy && (
+       <div className="space-y-2">
+         <h4 className="text-xs font-black text-slate-400 uppercase flex items-center gap-2">
+           <Activity size={14} /> Anatomia
+         </h4>
+         <p className="text-sm text-slate-600 leading-relaxed">{pest.anatomy}</p>
+       </div>
+     )}
+
+     <div className="space-y-3">
+       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Medidas de Controle</p>
+       <div className="grid gap-2">
+         {(pest.control || []).map((c: string, i: number) => (
+           <div key={i} className="flex items-start gap-3 p-3 bg-emerald-50/50 rounded-2xl border border-emerald-100/50">
+             <div className="mt-1 w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+             <p className="text-[10px] font-black text-emerald-900 leading-tight">{c}</p>
+           </div>
+         ))}
+       </div>
+     </div>
+  </div>
+);
+
 const App: React.FC = () => {
   const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail' | 'privacy' | 'report' | 'report-setup' | 'map'>('splash');
   const viewRef = useRef(view);
@@ -339,10 +406,14 @@ const App: React.FC = () => {
     const { data: authListener } = supabase.auth.onAuthStateChange((event: any, session: any) => {
       if (!isMounted) return;
       if (session?.user) {
-        setUser({ 
+        const newUser = { 
           id: session.user.id, 
           email: session.user.email || '', 
           name: session.user.email?.split('@')[0] || 'Usuário' 
+        };
+        setUser(prev => {
+          if (prev?.id === newUser.id && prev?.email === newUser.email) return prev;
+          return newUser;
         });
         fetchHistory();
         if (view === 'splash' || view === 'auth') setView('main');
@@ -460,7 +531,10 @@ const App: React.FC = () => {
         
         // Só atualiza se houver mudança real ou se for forçado
         setHistory(prev => {
-          const hasChanged = JSON.stringify(prev) !== JSON.stringify(mappedHistory);
+          // Comparação mais rápida: se o tamanho mudou ou se o ID do primeiro item mudou
+          const hasChanged = prev.length !== mappedHistory.length || 
+                            (prev.length > 0 && mappedHistory.length > 0 && prev[0].id !== mappedHistory[0].id);
+          
           if (hasChanged || force) {
             console.log("[History] Atualizando estado e forçando re-render do mapa");
             setMapKey(k => k + 1);
@@ -856,6 +930,7 @@ const App: React.FC = () => {
     if (view !== 'camera') { setView('camera'); return; }
     if (!videoRef.current) return;
     
+    const startTime = Date.now();
     setLoading(true); setError(null);
     try {
       // CAPTURA DE LOCALIZAÇÃO (EM PARALELO - NÃO BLOQUEIA O INÍCIO DA ANÁLISE)
@@ -1001,6 +1076,9 @@ const App: React.FC = () => {
       console.error("Erro captura:", e);
       setError(e.message || "Erro inesperado na análise.");
     } finally {
+      const elapsed = Date.now() - startTime;
+      const minTime = 800;
+      if (elapsed < minTime) await new Promise(r => setTimeout(r, minTime - elapsed));
       setLoading(false);
     }
   };
@@ -1008,6 +1086,7 @@ const App: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const startTime = Date.now();
     setLoading(true); setError(null);
     
     const objectUrl = URL.createObjectURL(file);
@@ -1152,6 +1231,9 @@ const App: React.FC = () => {
       console.error("Erro ao processar arquivo:", e);
       setError(e.message || "Erro ao processar arquivo.");
     } finally {
+      const elapsed = Date.now() - startTime;
+      const minTime = 800;
+      if (elapsed < minTime) await new Promise(r => setTimeout(r, minTime - elapsed));
       setLoading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
       if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -1160,6 +1242,7 @@ const App: React.FC = () => {
 
   const handleAiDeepSearch = async () => {
     if (!searchTerm.trim()) return;
+    const startTime = Date.now();
     setLoading(true); setIsAiSearching(true); setError(null);
     try {
       // 1. Tenta buscar no banco primeiro (Economia de API)
@@ -1188,132 +1271,12 @@ const App: React.FC = () => {
     } catch (e: any) {
       setError(e.message || "Erro na busca profunda.");
     } finally {
+      const elapsed = Date.now() - startTime;
+      const minTime = 800;
+      if (elapsed < minTime) await new Promise(r => setTimeout(r, minTime - elapsed));
       setLoading(false); setIsAiSearching(false);
     }
   };
-
-  const PestBioCard = ({ pest }: { pest: PestInfo }) => (
-    <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-6 animate-in fade-in slide-in-from-bottom-4">
-       <div className="flex justify-between items-start">
-         <div className="flex-1 pr-4">
-           <h2 className="text-2xl font-black text-slate-900 leading-tight">{pest.name}</h2>
-           <p className="text-emerald-600 font-bold italic text-sm">{pest.scientificName}</p>
-           {(pest as any).maxScoreIndex !== undefined && (
-             <p className="text-[10px] text-slate-400 font-bold mt-1">DEBUG ID: {(pest as any).maxScoreIndex}</p>
-           )}
-           {pest.source && (
-             <div className="flex items-center gap-1 mt-1 opacity-50">
-               <Globe size={10} />
-               <span className="text-[9px] font-black uppercase tracking-wider">{pest.source}</span>
-             </div>
-           )}
-         </div>
-         <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase whitespace-nowrap ${
-           pest.riskLevel === 'Crítico' ? 'bg-red-100 text-red-600' : 
-           pest.riskLevel === 'Alto' ? 'bg-orange-100 text-orange-600' : 
-           'bg-emerald-100 text-emerald-600'
-         }`}>
-           Risco {pest.riskLevel}
-         </div>
-       </div>
-
-       <div className="grid grid-cols-2 gap-3">
-         <div className="bg-slate-50 p-3 rounded-2xl">
-           <p className="text-[10px] font-black text-slate-400 uppercase">Membros</p>
-           <p className="text-sm font-bold text-slate-700">{pest.members || 'N/A'}</p>
-         </div>
-         <div className="bg-slate-50 p-3 rounded-2xl">
-           <p className="text-[10px] font-black text-slate-400 uppercase">Reprodução</p>
-           <p className="text-sm font-bold text-slate-700 truncate">{pest.reproduction || 'N/A'}</p>
-         </div>
-       </div>
-
-       <div className="space-y-2">
-         <h4 className="text-xs font-black text-slate-400 uppercase flex items-center gap-2">
-           <Info size={14} /> Biologia e Hábitos
-         </h4>
-         <p className="text-sm text-slate-600 leading-relaxed">{pest.habits}</p>
-       </div>
-
-       {pest.anatomy && (
-         <div className="space-y-2">
-           <h4 className="text-xs font-black text-slate-400 uppercase flex items-center gap-2">
-             <Activity size={14} /> Anatomia
-           </h4>
-           <p className="text-sm text-slate-600 leading-relaxed">{pest.anatomy}</p>
-         </div>
-       )}
-
-       {pest.larvalPhase && (
-         <div className="space-y-2">
-           <h4 className="text-xs font-black text-slate-400 uppercase flex items-center gap-2">
-             <Clock size={14} /> Fase Larval
-           </h4>
-           <p className="text-sm text-slate-600 leading-relaxed">{pest.larvalPhase}</p>
-         </div>
-       )}
-
-       {pest.characteristics && pest.characteristics.length > 0 && (
-         <div className="flex flex-wrap gap-2">
-           {pest.characteristics.map((c, i) => (
-             <span key={i} className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[10px] font-bold">
-               {c}
-             </span>
-           ))}
-         </div>
-       )}
-
-       <div className="bg-emerald-900 p-5 rounded-[2rem] text-white shadow-inner space-y-5">
-         <div>
-           <h4 className="font-black text-[10px] uppercase mb-2 text-emerald-300 flex items-center gap-2">
-             <ShieldCheck size={14} /> Métodos de Controle
-           </h4>
-           <ul className="space-y-1.5">
-             {(pest.controlMethods || []).map((m, i) => (
-               <li key={i} className="text-[11px] flex gap-2">
-                 <span className="text-emerald-400 font-bold">•</span> {m}
-               </li>
-             ))}
-           </ul>
-         </div>
-
-         <div className="pt-4 border-t border-emerald-800">
-           <h4 className="font-black text-[10px] uppercase mb-2 text-emerald-300 flex items-center gap-2">
-             <Hammer size={12} /> Medidas Físicas
-           </h4>
-           <ul className="space-y-1.5">
-             {(pest.physicalMeasures || []).map((m, i) => (
-               <li key={i} className="text-[11px] flex gap-2">
-                 <span className="text-emerald-400 font-bold">•</span> {m}
-               </li>
-             ))}
-           </ul>
-         </div>
-
-         <div className="pt-4 border-t border-emerald-800">
-           <h4 className="font-black text-[10px] uppercase mb-2 text-emerald-300 flex items-center gap-2">
-             <FlaskConical size={12} /> Medidas Químicas
-           </h4>
-           <ul className="space-y-1.5">
-             {(pest.chemicalMeasures || []).map((m, i) => (
-               <li key={i} className="text-[11px] flex gap-2">
-                 <span className="text-emerald-400 font-bold">•</span> {m}
-               </li>
-             ))}
-           </ul>
-         </div>
-       </div>
-
-       {pest.healthRisks && (
-         <div className="p-4 bg-red-50 border border-red-100 rounded-3xl">
-            <h4 className="text-[10px] font-black text-red-600 uppercase mb-1 flex items-center gap-2">
-              <AlertCircle size={14} /> Riscos à Saúde
-            </h4>
-            <p className="text-xs text-red-700 leading-relaxed font-medium">{pest.healthRisks}</p>
-         </div>
-       )}
-    </div>
-  );
 
   if (view === 'privacy') return <PestScanPrivacy onBack={() => setView(user ? 'main' : 'auth')} />;
 
@@ -1615,7 +1578,7 @@ const App: React.FC = () => {
         )}
         
         {view === 'main' && (
-          <div className="space-y-8 animate-in fade-in">
+          <div className="space-y-8">
             <div className="relative group">
               <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-emerald-500 transition-colors" size={20} />
               <input 
@@ -1628,7 +1591,7 @@ const App: React.FC = () => {
             </div>
 
             {searchTerm.trim() !== '' && ENCYCLOPEDIA_DATA.filter(p => normalizeString(p.name).includes(normalizeString(searchTerm))).length === 0 && (
-              <div className="bg-emerald-50 p-8 rounded-[3rem] border border-emerald-100 animate-in zoom-in-95">
+              <div className="bg-emerald-50 p-8 rounded-[3rem] border border-emerald-100">
                 <div className="flex items-center gap-4 mb-5">
                   <div className="bg-emerald-500 p-3 rounded-2xl text-white shadow-lg shadow-emerald-500/20"><Cpu size={24} /></div>
                   <h3 className="text-emerald-900 font-black text-sm uppercase tracking-tight">Busca Profunda IA</h3>
@@ -1660,16 +1623,16 @@ const App: React.FC = () => {
         )}
 
         {view === 'camera' && (
-          <div className="flex flex-col items-center animate-in fade-in zoom-in-95">
+          <div className="flex flex-col items-center">
              <div className="mb-6 flex flex-wrap justify-center gap-3">
-                <div className="flex items-center gap-3 px-5 py-2.5 bg-white/80 backdrop-blur-md rounded-2xl border border-slate-100 shadow-sm">
+                <div className="flex items-center gap-3 px-5 py-2.5 bg-white/80 rounded-2xl border border-slate-100 shadow-sm">
                    <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
                      Motor Local: {modelStatus}
                    </span>
                 </div>
                 {!isOnline && (
-                  <div className="flex items-center gap-3 px-5 py-2.5 bg-red-500 text-white backdrop-blur-md rounded-2xl shadow-sm animate-pulse">
+                  <div className="flex items-center gap-3 px-5 py-2.5 bg-red-500 text-white rounded-2xl shadow-sm animate-pulse">
                      <WifiOff size={14} />
                      <span className="text-[10px] font-black uppercase tracking-widest">Offline</span>
                   </div>
@@ -1682,7 +1645,7 @@ const App: React.FC = () => {
                 <div className="absolute top-6 left-6 flex gap-3 z-50">
                   <button 
                     onClick={() => fileInputRef.current?.click()}
-                    className="p-5 rounded-2xl bg-black/40 text-white border border-white/20 backdrop-blur-md transition-all active:scale-90"
+                    className="p-5 rounded-2xl bg-black/40 text-white border border-white/20 transition-all active:scale-90"
                   >
                     <ImageIcon size={24} />
                   </button>
@@ -1692,7 +1655,7 @@ const App: React.FC = () => {
                 {hasFlash && (
                   <button 
                     onClick={toggleFlash} 
-                    className={`absolute top-6 right-6 p-5 rounded-2xl backdrop-blur-md transition-all active:scale-90 z-50 ${
+                    className={`absolute top-6 right-6 p-5 rounded-2xl transition-all active:scale-90 z-50 ${
                         flashOn ? 'bg-yellow-400 text-yellow-950' : 'bg-black/40 text-white border border-white/20'
                     }`}
                   >
@@ -1714,7 +1677,7 @@ const App: React.FC = () => {
         )}
 
         {view === 'map' && (
-          <div className="space-y-8 animate-in fade-in pb-12">
+          <div className="space-y-8 pb-12">
             <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
               <div className="flex items-center gap-4 mb-6">
                 <div className="flex items-center gap-2">
@@ -2430,7 +2393,7 @@ const App: React.FC = () => {
         )}
 
         {view === 'detail' && selectedPest && (
-          <div className="space-y-8 pb-12 animate-in fade-in slide-in-from-left-6">
+          <div className="space-y-8 pb-12">
             <button onClick={() => { setView('main'); setSelectedPest(null); }} className="flex items-center gap-3 text-[10px] font-black uppercase tracking-widest text-slate-400 bg-white px-6 py-4 rounded-2xl shadow-sm border border-slate-50 active:scale-95 transition-all">
               <ArrowLeft size={18} /> Voltar ao Guia
             </button>
@@ -2439,7 +2402,7 @@ const App: React.FC = () => {
         )}
       </main>
 
-      <nav className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur-2xl border-t border-slate-100 px-10 pt-5 pb-10 flex justify-between items-center z-50 rounded-t-[3.5rem] shadow-[0_-20px_50px_-15px_rgba(0,0,0,0.08)]">
+      <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-100 px-10 pt-5 pb-10 flex justify-between items-center z-50 rounded-t-[3.5rem] shadow-[0_-20px_50px_-15px_rgba(0,0,0,0.08)]">
         <button onClick={() => { setView('main'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all w-20 ${view === 'main' || view === 'detail' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
           <BookOpen size={24} />
           <span className="text-[9px] font-black uppercase tracking-widest">Guia</span>
@@ -2456,10 +2419,10 @@ const App: React.FC = () => {
       </nav>
 
       {loading && (
-        <div className="fixed inset-0 bg-emerald-950/95 backdrop-blur-xl z-[100] flex flex-col items-center justify-center text-white p-12 text-center animate-in fade-in">
+        <div className="fixed inset-0 bg-emerald-950 z-[100] flex flex-col items-center justify-center text-white p-12 text-center">
           <div className="relative mb-10">
             <div className="w-24 h-24 border-4 border-emerald-400/20 border-t-emerald-400 rounded-full animate-spin shadow-2xl" />
-            <Bug className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-emerald-400 w-10 h-10 animate-pulse" />
+            <Bug className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-emerald-400 w-10 h-10" />
           </div>
           <h2 className="text-2xl font-black mb-3 uppercase tracking-tighter">Acessando IA Urbana</h2>
           <p className="text-[10px] text-emerald-400/60 font-black uppercase tracking-[0.4em] max-w-[200px] leading-relaxed">
