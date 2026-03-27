@@ -1,12 +1,22 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Prioriza variáveis de ambiente do sistema (Vercel/Vite)
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+// Prioriza variáveis de ambiente do sistema (Vercel/Vite/Process)
+const getEnv = (key: string) => {
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key]) {
+    return import.meta.env[key];
+  }
+  if (typeof process !== 'undefined' && process.env && process.env[key]) {
+    return process.env[key];
+  }
+  return '';
+};
+
+const supabaseUrl = getEnv('VITE_SUPABASE_URL').trim();
+const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY').trim();
 
 // Diagnóstico de configuração
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("⚠️ CONFIGURAÇÃO AUSENTE: As variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY não foram encontradas. O login online não funcionará até que você as configure no menu Settings.");
+  console.warn("⚠️ CONFIGURAÇÃO AUSENTE: As variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY não foram encontradas.");
 }
 
 if (!supabaseUrl.includes('supabase.co')) {
