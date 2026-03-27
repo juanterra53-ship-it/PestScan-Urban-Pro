@@ -556,7 +556,9 @@ const App: React.FC = () => {
       if (error) throw error;
       
       if (data) {
+        console.log(`[History] ${data.length} registros encontrados.`);
         const mappedHistory = data.map((item: any) => {
+          console.log(`[History] Item ID: ${item.id}, Image Data length: ${item.image_data?.length || 0}, Image Data starts with: ${item.image_data?.substring(0, 30)}...`);
           let result = item.analysis_result;
           if (typeof result === 'string') {
             try { result = JSON.parse(result); } catch (e) { console.error("[History] Erro parse:", e); }
@@ -566,8 +568,9 @@ const App: React.FC = () => {
             result = { pestFound: false, confidence: 0 };
           }
 
-          const dbLat = item.latitude !== null ? Number(item.latitude) : NaN;
-          const dbLon = item.longitude !== null ? Number(item.longitude) : NaN;
+          // Tenta ler das colunas (se existirem) ou do JSON (fallback)
+          const dbLat = item.latitude !== undefined && item.latitude !== null ? Number(item.latitude) : (result.location?.latitude);
+          const dbLon = item.longitude !== undefined && item.longitude !== null ? Number(item.longitude) : (result.location?.longitude);
 
           if (isValidCoord(dbLat) && isValidCoord(dbLon)) {
             result.location = {
@@ -580,11 +583,15 @@ const App: React.FC = () => {
           return { 
             id: item.id, 
             timestamp: new Date(item.created_at).getTime(), 
-            image: item.image_data, 
+            image: (item.image_data?.startsWith('http') || item.image_data?.startsWith('data:')) 
+              ? item.image_data 
+              : (item.image_data ? `data:image/jpeg;base64,${item.image_data}` : 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'), 
             result: result,
-            location: item.location_name
+            location: item.location_name || result.location?.address
           };
         });
+        
+        console.log("[History] Mapped History sample image:", mappedHistory[0]?.image?.substring(0, 30));
         
         // Só atualiza se houver mudança real ou se for forçado
         setHistory(prev => {
@@ -1036,7 +1043,8 @@ const App: React.FC = () => {
       const localRes = results.sort((a, b) => b.confidence - a.confidence)[0];
       setNormMode(localRes.normalizationMode || 0);
       
-      if (localRes.pestFound && localRes.confidence > 0.80 && localRes.pest) {
+      if (localRes.pestFound && localRes.confidence > 0.75 && localRes.pest) {
+        console.log(`[History] Buscando referência no banco para: ${localRes.pest.name}`);
         const { data: existingData } = await supabase
           .from('pest_detections')
           .select('analysis_result')
@@ -1045,13 +1053,23 @@ const App: React.FC = () => {
           .order('confidence', { ascending: false })
           .limit(1);
 
-        if (existingData && existingData.length > 0 && existingData[0].analysis_result.pestFound) {
-          res = {
-            ...existingData[0].analysis_result,
-            confidence: localRes.confidence,
-            message: `Identificado via Referência Local (${localRes.pest.name})`,
-            source: 'Banco de Dados'
-          };
+        if (existingData && existingData.length > 0) {
+          const cachedResult = typeof existingData[0].analysis_result === 'string' 
+            ? JSON.parse(existingData[0].analysis_result) 
+            : existingData[0].analysis_result;
+
+          if (cachedResult && cachedResult.pestFound) {
+            console.log("✅ [History] Usando ficha técnica do banco de dados.");
+            res = {
+              ...cachedResult,
+              confidence: localRes.confidence,
+              message: `Identificado via Referência Local (${localRes.pest.name})`,
+              source: 'Banco de Dados',
+              capturedImage: undefined // Será preenchido depois
+            };
+          } else {
+            res = await analyzePestImage(base64, canvas, normMode);
+          }
         } else {
           res = await analyzePestImage(base64, canvas, normMode);
         }
@@ -1101,32 +1119,47 @@ const App: React.FC = () => {
             if (!uploadError) {
               const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
               imageUrl = data.publicUrl;
+            } else {
+              console.warn("Upload falhou, usando base64 otimizado:", uploadError);
+              const rawBase64 = await resizeImage(dataUrl, 400); // Fallback para base64 pequeno se falhar upload
+              imageUrl = `data:image/jpeg;base64,${rawBase64}`;
             }
           } catch (uploadErr) {
-            console.warn("Upload falhou:", uploadErr);
+            console.warn("Erro no processo de upload:", uploadErr);
           }
 
-          console.log("[History] Salvando captura no banco:", { 
-            user_id: user.id, 
-            pest_name: res.pest?.name || 'Scan', 
-            lat: finalLoc.lat, 
-            lon: finalLoc.lon,
-            address: finalLoc.address
-          });
+          // OTIMIZAÇÃO CRÍTICA: Remove a imagem base64 do JSON antes de salvar no banco
+          // Isso evita estourar o limite de tamanho da coluna e economiza muito espaço/tráfego
+          // Incluímos a localização dentro do dbResult para garantir que ela seja salva mesmo sem colunas extras
+          const dbResult = { 
+            ...resultWithImage, 
+            capturedImage: undefined,
+            location: {
+              latitude: validatedLoc.lat,
+              longitude: validatedLoc.lon,
+              address: validatedLoc.address
+            }
+          };
 
-          await supabase.from('pest_detections').insert({ 
+          console.log("[History] Salvando captura no banco...");
+          const { error: insertError } = await supabase.from('pest_detections').insert([{ 
             user_id: user.id, 
-            image_data: imageUrl, 
+            image_data: imageUrl || dataUrl, 
             pest_name: res.pest?.name || 'Scan', 
-            confidence: res.confidence, 
-            analysis_result: resultWithImage,
-            location_name: finalLoc.address,
-            latitude: finalLoc.lat,
-            longitude: finalLoc.lon
-          });
+            confidence: Number(res.confidence) || 0, 
+            analysis_result: dbResult // Salvamos tudo no JSON para compatibilidade total
+          }]);
+
+          if (insertError) {
+            console.error("❌ [History] Erro no insert:", insertError);
+            throw insertError;
+          }
+          console.log("✅ [History] Salvo com sucesso!");
           fetchHistory();
-        } catch (e) {
-          console.warn("Erro ao salvar histórico:", e);
+        } catch (e: any) {
+          console.error("❌ Erro ao salvar histórico no Supabase:", e);
+          const errorMsg = e.message || e.details || "Erro de rede ou permissão";
+          showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
         }
       }
     } catch (e: any) {
@@ -1213,23 +1246,32 @@ const App: React.FC = () => {
 
       // --- LÓGICA DE ECONOMIA DE API PARA UPLOAD ---
       if (res.pestFound && res.pest) {
+        console.log(`[History] Buscando referência no banco para: ${res.pest.name}`);
         const { data: existingData } = await supabase
           .from('pest_detections')
           .select('analysis_result')
-          .eq('pest_name', res.pest.name)
+          .ilike('pest_name', `%${res.pest.name}%`)
           .not('analysis_result', 'is', null)
-          .order('created_at', { ascending: false })
+          .order('confidence', { ascending: false })
           .limit(1);
 
         if (existingData && existingData.length > 0) {
-          const currentLocation = res.location;
-          res = {
-            ...existingData[0].analysis_result,
-            confidence: res.confidence,
-            location: currentLocation,
-            message: "Ficha técnica otimizada (Cache)",
-            source: 'Banco de Dados'
-          };
+          const cachedResult = typeof existingData[0].analysis_result === 'string' 
+            ? JSON.parse(existingData[0].analysis_result) 
+            : existingData[0].analysis_result;
+
+          if (cachedResult && cachedResult.pestFound) {
+            console.log("✅ [History] Usando ficha técnica do banco de dados.");
+            const currentLocation = res.location;
+            res = {
+              ...cachedResult,
+              confidence: res.confidence,
+              location: currentLocation,
+              message: "Ficha técnica otimizada (Cache)",
+              source: 'Banco de Dados',
+              capturedImage: undefined
+            };
+          }
         }
       }
 
@@ -1256,32 +1298,42 @@ const App: React.FC = () => {
             if (!uploadError) {
               const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
               imageUrl = data.publicUrl;
+            } else {
+              console.warn("Upload falhou, usando base64 otimizado:", uploadError);
+              const rawBase64 = await resizeImage(resizedDataUrl, 400);
+              imageUrl = `data:image/jpeg;base64,${rawBase64}`;
             }
           } catch (uploadErr) {
-            console.warn("Upload de arquivo falhou:", uploadErr);
+            console.warn("Erro no processo de upload de arquivo:", uploadErr);
           }
 
-          console.log("[History] Salvando arquivo no banco:", { 
-            user_id: user.id, 
-            pest_name: res.pest?.name || 'Scan', 
-            lat: finalLoc.lat, 
-            lon: finalLoc.lon,
-            address: finalLoc.address
-          });
+          // OTIMIZAÇÃO CRÍTICA: Remove a imagem base64 do JSON antes de salvar no banco
+          const dbResult = { 
+            ...resultWithImage, 
+            capturedImage: undefined,
+            location: {
+              latitude: validatedLoc.lat,
+              longitude: validatedLoc.lon,
+              address: validatedLoc.address
+            }
+          };
 
-          await supabase.from('pest_detections').insert({ 
+          console.log("[History] Salvando arquivo no banco...");
+          const { error: insertError } = await supabase.from('pest_detections').insert([{ 
             user_id: user.id, 
-            image_data: imageUrl, 
+            image_data: imageUrl || resizedDataUrl, 
             pest_name: res.pest?.name || 'Scan', 
-            confidence: res.confidence, 
-            analysis_result: resultWithImage,
-            location_name: finalLoc.address,
-            latitude: finalLoc.lat,
-            longitude: finalLoc.lon
-          });
+            confidence: Number(res.confidence) || 0, 
+            analysis_result: dbResult
+          }]);
+
+          if (insertError) throw insertError;
+          console.log("✅ [History] Arquivo salvo com sucesso!");
           fetchHistory();
-        } catch (e) {
-          console.warn("Erro ao salvar histórico de arquivo:", e);
+        } catch (e: any) {
+          console.error("❌ Erro ao salvar histórico de arquivo no Supabase:", e);
+          const errorMsg = e.message || e.details || "Erro de rede ou permissão";
+          showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
         }
       }
     } catch (e: any) {
@@ -1878,7 +1930,15 @@ const App: React.FC = () => {
                             >
                               <Popup>
                                 <div className="w-40 p-1">
-                                  <img src={entry.image} className="w-full h-24 object-cover rounded-xl mb-2" />
+                                  <img 
+                                    src={entry.image || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
+                                    className="w-full h-24 object-cover rounded-xl mb-2" 
+                                    referrerPolicy="no-referrer"
+                                    onError={(e) => {
+                                      console.warn("[Map] Erro ao carregar imagem:", entry.image?.substring(0, 50));
+                                      (e.target as HTMLImageElement).src = 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem';
+                                    }}
+                                  />
                                   <div className="flex items-center justify-between mb-1">
                                     <p className="font-black text-xs text-slate-900 uppercase leading-none">{entry.result.pest?.name || 'Scan'}</p>
                                     {isNew && (
@@ -1994,8 +2054,16 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 history.map(entry => (
-                  <div key={entry.id} className="bg-white p-4 rounded-[3rem] border border-slate-100 flex gap-5 items-center shadow-sm active:scale-[0.98] transition-all relative group" onClick={() => { setCurrentResult(entry.result); setView('result'); }}>
-                    <img src={entry.image} className="w-20 h-20 rounded-[2rem] object-cover shadow-inner" />
+                  <div key={entry.id} className="bg-white p-4 rounded-[3rem] border border-slate-100 flex gap-5 items-center shadow-sm active:scale-[0.98] transition-all relative group" onClick={() => { setCurrentResult({ ...entry.result, capturedImage: entry.image }); setView('result'); }}>
+                    <img 
+                      src={entry.image || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
+                      className="w-20 h-20 rounded-[2rem] object-cover shadow-inner" 
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        console.warn("[History] Erro ao carregar imagem:", entry.image?.substring(0, 50));
+                        (e.target as HTMLImageElement).src = 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem';
+                      }}
+                    />
                     <div className="flex-1 overflow-hidden">
                       <p className="text-sm font-black text-slate-900 truncate mb-1">{entry.result.pest?.name || "Scan Desconhecido"}</p>
                       <div className="flex flex-col gap-1">
@@ -2035,8 +2103,13 @@ const App: React.FC = () => {
           <div className="space-y-8 pb-12 animate-in fade-in slide-in-from-bottom-6">
               <div className="relative">
                 <img 
-                  src={currentResult.capturedImage} 
+                  src={currentResult.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
                   className="w-full aspect-square object-cover rounded-[4rem] border-8 border-white shadow-2xl" 
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    console.warn("[Result] Erro ao carregar imagem:", currentResult.capturedImage?.substring(0, 50));
+                    (e.target as HTMLImageElement).src = 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem';
+                  }}
                 />
                 <div className="absolute top-6 right-6 flex flex-col gap-2 items-end">
                   <div className="bg-emerald-900/90 backdrop-blur-md px-4 py-2 rounded-2xl text-white text-[11px] font-black shadow-xl">
@@ -2315,11 +2388,14 @@ const App: React.FC = () => {
                     </h3>
                     <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner" style={{ borderColor: '#f8fafc' }}>
                       <img 
-                        src={currentResult.capturedImage} 
+                        src={currentResult.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
                         alt="Evidência" 
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
-                        crossOrigin="anonymous"
+                        onError={(e) => {
+                          console.warn("[Report] Erro ao carregar imagem:", currentResult.capturedImage?.substring(0, 50));
+                          (e.target as HTMLImageElement).src = 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem';
+                        }}
                       />
                     </div>
                   </div>
@@ -2334,8 +2410,6 @@ const App: React.FC = () => {
                             src={`https://static-maps.yandex.ru/1.x/?lang=pt_BR&ll=${currentResult.location.longitude},${currentResult.location.latitude}&z=16&l=map&pt=${currentResult.location.longitude},${currentResult.location.latitude},pm2rdm`}
                             alt="Mapa"
                             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                            referrerPolicy="no-referrer"
-                            crossOrigin="anonymous"
                             onError={(e) => {
                               (e.target as HTMLImageElement).src = `https://picsum.photos/seed/map-${currentResult.location?.latitude}/800/450`;
                             }}
