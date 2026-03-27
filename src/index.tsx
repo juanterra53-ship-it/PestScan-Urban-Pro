@@ -154,17 +154,74 @@ const PestBioCard = ({ pest }: { pest: PestInfo }) => (
        </div>
      )}
 
-     <div className="space-y-3">
-       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Medidas de Controle</p>
-       <div className="grid gap-2">
-         {(pest.control || []).map((c: string, i: number) => (
-           <div key={i} className="flex items-start gap-3 p-3 bg-emerald-50/50 rounded-2xl border border-emerald-100/50">
-             <div className="mt-1 w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-             <p className="text-[10px] font-black text-emerald-900 leading-tight">{c}</p>
-           </div>
+     {pest.larvalPhase && (
+       <div className="space-y-2">
+         <h4 className="text-xs font-black text-slate-400 uppercase flex items-center gap-2">
+           <Clock size={14} /> Fase Larval
+         </h4>
+         <p className="text-sm text-slate-600 leading-relaxed">{pest.larvalPhase}</p>
+       </div>
+     )}
+
+     {pest.characteristics && pest.characteristics.length > 0 && (
+       <div className="flex flex-wrap gap-2">
+         {pest.characteristics.map((c, i) => (
+           <span key={i} className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[10px] font-bold">
+             {c}
+           </span>
          ))}
        </div>
+     )}
+
+     <div className="bg-emerald-900 p-5 rounded-[2rem] text-white shadow-inner space-y-5">
+       <div>
+         <h4 className="font-black text-[10px] uppercase mb-2 text-emerald-300 flex items-center gap-2">
+           <ShieldCheck size={14} /> Métodos de Controle
+         </h4>
+         <ul className="space-y-1.5">
+           {(pest.controlMethods || []).map((m, i) => (
+             <li key={i} className="text-[11px] flex gap-2">
+               <span className="text-emerald-400 font-bold">•</span> {m}
+             </li>
+           ))}
+         </ul>
+       </div>
+
+       <div className="pt-4 border-t border-emerald-800">
+         <h4 className="font-black text-[10px] uppercase mb-2 text-emerald-300 flex items-center gap-2">
+           <Hammer size={12} /> Medidas Físicas
+         </h4>
+         <ul className="space-y-1.5">
+           {(pest.physicalMeasures || []).map((m, i) => (
+             <li key={i} className="text-[11px] flex gap-2">
+               <span className="text-emerald-400 font-bold">•</span> {m}
+             </li>
+           ))}
+         </ul>
+       </div>
+
+       <div className="pt-4 border-t border-emerald-800">
+         <h4 className="font-black text-[10px] uppercase mb-2 text-emerald-300 flex items-center gap-2">
+           <FlaskConical size={12} /> Medidas Químicas (Princípios Ativos/Dosagens)
+         </h4>
+         <ul className="space-y-1.5">
+           {(pest.chemicalMeasures || []).map((m, i) => (
+             <li key={i} className="text-[11px] flex gap-2">
+               <span className="text-emerald-400 font-bold">•</span> {m}
+             </li>
+           ))}
+         </ul>
+       </div>
      </div>
+
+     {pest.healthRisks && (
+       <div className="p-4 bg-red-50 border border-red-100 rounded-3xl">
+          <h4 className="text-[10px] font-black text-red-600 uppercase mb-1 flex items-center gap-2">
+            <AlertCircle size={14} /> Riscos à Saúde / Interesse Médico
+          </h4>
+          <p className="text-xs text-red-700 leading-relaxed font-medium">{pest.healthRisks}</p>
+       </div>
+     )}
   </div>
 );
 
