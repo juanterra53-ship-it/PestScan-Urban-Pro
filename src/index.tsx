@@ -8,10 +8,10 @@ import {
   Trash2, Clock, Hammer, FlaskConical,
   User, Lock, Mail, LogOut, CheckCircle,
   Database, ShieldCheck, Zap, ZapOff,
-  Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw, Printer,
+  Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw, Printer, Save, FileText,
   ChevronDown, ChevronUp, Activity, AlertCircle, Share2, Map as MapIcon
 } from 'lucide-react';
-import { MapContainer, TileLayer, Marker, Popup, Circle, CircleMarker, useMap, FeatureGroup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Circle, CircleMarker, useMap, FeatureGroup, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import 'leaflet/dist/leaflet.css';
@@ -28,6 +28,7 @@ import { toPng } from 'html-to-image';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { registerSW } from 'virtual:pwa-register';
+import SignatureCanvas from 'react-signature-canvas';
 import './index.css';
 import { supabase } from './supabaseClient';
 import PestScanPrivacy from './legal/PestScanPrivacy';
@@ -61,6 +62,13 @@ const MapViewUpdater: React.FC<{ center: [number, number] }> = ({ center }) => {
       map.setView(center, map.getZoom());
     }
   }, [center, map]);
+  return null;
+};
+
+const MapEvents: React.FC<{ onMoveStart: () => void }> = ({ onMoveStart }) => {
+  useMapEvents({
+    movestart: onMoveStart,
+  });
   return null;
 };
 
@@ -273,24 +281,51 @@ const App: React.FC = () => {
   const [normMode, setNormMode] = useState(2);
   const [mapKey, setMapKey] = useState(0);
   const [isFetching, setIsFetching] = useState(false);
+  const [shouldFollowUser, setShouldFollowUser] = useState(true);
+  const [signature, setSignature] = useState<string | null>(null);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+
+  const chartData = useMemo(() => {
+    const counts: { [key: string]: number } = {};
+    history.forEach(h => {
+      const name = h.result.pest?.name || 'Não Identificado';
+      counts[name] = (counts[name] || 0) + 1;
+    });
+    return Object.keys(counts).map(name => ({ name, count: counts[name] })).sort((a, b) => b.count - a.count);
+  }, [history]);
+
+  const [activeBatchIndex, setActiveBatchIndex] = useState(0);
+
+  // Sincroniza campos do relatório com o resultado atual
+  useEffect(() => {
+    if (currentResult) {
+      const target = currentResult.batchResults ? currentResult.batchResults[activeBatchIndex] : currentResult;
+      setReportObservation(target.observations || '');
+      setReportMeasures(target.measures || '');
+      setReportArea(target.area || '');
+    } else {
+      setReportObservation('');
+      setReportMeasures('');
+      setReportArea('');
+    }
+  }, [currentResult?.id, currentResult?.batchResults, activeBatchIndex]);
+
+  const reportChartData = useMemo(() => {
+    const entries = currentResult?.batchResults || (currentResult ? [currentResult] : []);
+    const counts: { [key: string]: number } = {};
+    entries.forEach(res => {
+      const name = res.pest?.name || 'Não Identificado';
+      counts[name] = (counts[name] || 0) + 1;
+    });
+    return Object.keys(counts).map(name => ({ name, count: counts[name] })).sort((a, b) => b.count - a.count);
+  }, [currentResult]);
+
+  const reportEntries = useMemo(() => {
+    return currentResult?.batchResults || (currentResult ? [currentResult] : []);
+  }, [currentResult]);
 
   const [showSkip, setShowSkip] = useState(false);
   const lastLocRef = useRef<{lat: number, lon: number}>({lat: 0, lon: 0});
-
-  const userIcon = useMemo(() => {
-    if (typeof window === 'undefined') return null;
-    return L.divIcon({
-      className: 'custom-user-marker',
-      html: `
-        <div style="position: relative; width: 20px; height: 20px;">
-          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 12px; height: 12px; background-color: #3b82f6; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 10px rgba(59, 130, 246, 0.5); z-index: 2;"></div>
-          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 12px; height: 12px; background-color: #3b82f6; border-radius: 50%; animation: pulse 2s infinite; z-index: 1;"></div>
-        </div>
-      `,
-      iconSize: [20, 20],
-      iconAnchor: [10, 10]
-    });
-  }, []);
 
   // Real-time location tracking
   useEffect(() => {
@@ -347,6 +382,7 @@ const App: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reportRef = useRef<HTMLDivElement>(null);
+  const sigCanvas = useRef<SignatureCanvas>(null);
 
   // Monitoramento de conexão
   useEffect(() => {
@@ -697,18 +733,23 @@ const App: React.FC = () => {
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
       
       // Método de download mais robusto para mobile/iframes
-      const pdfBlob = pdf.output('blob');
-      const url = URL.createObjectURL(pdfBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      
-      setTimeout(() => {
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      }, 1000);
+      try {
+        pdf.save(fileName);
+      } catch (saveError) {
+        console.warn("pdf.save falhou, tentando blob:", saveError);
+        const pdfBlob = pdf.output('blob');
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, 1000);
+      }
 
       showToast("Download concluído!", "success");
     } catch (e) {
@@ -815,6 +856,44 @@ const App: React.FC = () => {
       showToast(`Erro ao gerar PDF: ${err.message || 'Tente novamente'}`, "error");
     } finally {
       setIsGeneratingPDF(false);
+    }
+  };
+
+  const savePestDetails = async () => {
+    if (!currentResult || !currentResult.id) {
+      showToast("Nenhum scan selecionado para salvar.", "error");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Otimização: remove a imagem base64 antes de salvar no JSON do banco
+      const dbResult = { 
+        ...currentResult, 
+        capturedImage: undefined 
+      };
+
+      const { error } = await supabase
+        .from('pest_detections')
+        .update({ 
+          analysis_result: dbResult,
+          pest_name: currentResult.pest?.name || 'Scan'
+        })
+        .eq('id', currentResult.id);
+
+      if (error) throw error;
+
+      // Atualiza o histórico local para refletir as mudanças
+      setHistory(prev => prev.map(h => 
+        h.id === currentResult.id ? { ...h, result: currentResult } : h
+      ));
+
+      showToast("Informações salvas com sucesso!", "success");
+    } catch (e: any) {
+      console.error("Erro ao salvar detalhes:", e);
+      showToast("Erro ao salvar: " + (e.message || "Erro de rede"), "error");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1142,18 +1221,24 @@ const App: React.FC = () => {
           };
 
           console.log("[History] Salvando captura no banco...");
-          const { error: insertError } = await supabase.from('pest_detections').insert([{ 
+          const { data: insertData, error: insertError } = await supabase.from('pest_detections').insert([{ 
             user_id: user.id, 
             image_data: imageUrl || dataUrl, 
             pest_name: res.pest?.name || 'Scan', 
             confidence: Number(res.confidence) || 0, 
             analysis_result: dbResult // Salvamos tudo no JSON para compatibilidade total
-          }]);
+          }]).select();
 
           if (insertError) {
             console.error("❌ [History] Erro no insert:", insertError);
             throw insertError;
           }
+
+          if (insertData && insertData.length > 0) {
+            const newId = insertData[0].id;
+            setCurrentResult(prev => prev ? { ...prev, id: newId } : null);
+          }
+
           console.log("✅ [History] Salvo com sucesso!");
           fetchHistory();
         } catch (e: any) {
@@ -1319,15 +1404,21 @@ const App: React.FC = () => {
           };
 
           console.log("[History] Salvando arquivo no banco...");
-          const { error: insertError } = await supabase.from('pest_detections').insert([{ 
+          const { data: insertData, error: insertError } = await supabase.from('pest_detections').insert([{ 
             user_id: user.id, 
             image_data: imageUrl || resizedDataUrl, 
             pest_name: res.pest?.name || 'Scan', 
             confidence: Number(res.confidence) || 0, 
             analysis_result: dbResult
-          }]);
+          }]).select();
 
           if (insertError) throw insertError;
+
+          if (insertData && insertData.length > 0) {
+            const newId = insertData[0].id;
+            setCurrentResult(prev => prev ? { ...prev, id: newId } : null);
+          }
+
           console.log("✅ [History] Arquivo salvo com sucesso!");
           fetchHistory();
         } catch (e: any) {
@@ -1713,7 +1804,27 @@ const App: React.FC = () => {
             )}
 
             <div className="grid gap-4">
-              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] px-2">Enciclopédia Bio-Urbana</h3>
+              <div className="flex justify-between items-center px-2">
+                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Enciclopédia Bio-Urbana</h3>
+                <button 
+                  onClick={() => {
+                    if (navigator.share) {
+                      navigator.share({
+                        title: 'PestScan Pro',
+                        text: 'Confira este app incrível para reconhecimento de pragas urbanas!',
+                        url: window.location.origin
+                      }).catch(console.error);
+                    } else {
+                      showToast("Link copiado para a área de transferência!", "success");
+                      navigator.clipboard.writeText(window.location.origin);
+                    }
+                  }}
+                  className="flex items-center gap-2 text-[9px] font-black text-slate-400 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-full active:scale-95 transition-all"
+                >
+                  <Share2 size={12} />
+                  Indicar App
+                </button>
+              </div>
               {ENCYCLOPEDIA_DATA.filter(item => {
                 const search = normalizeString(searchTerm);
                 return normalizeString(item.name).includes(search) || normalizeString(item.category).includes(search);
@@ -1813,20 +1924,22 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="w-full h-[400px] rounded-[2.5rem] overflow-hidden border-4 border-slate-50 shadow-inner relative z-10">
-                {/* Manual Refresh Button - Moved OUTSIDE MapContainer for better clickability */}
+                <div className="w-full h-[400px] rounded-[2.5rem] overflow-hidden border-4 border-slate-50 shadow-inner relative z-10">
+                {/* Manual Refresh Button - Removed extra one for cleaner UI */}
                 <div className="absolute top-4 right-4 z-[2000]">
                   <button 
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      fetchHistory(true);
+                      setShouldFollowUser(true);
+                      if (location) {
+                        setMapKey(k => k + 1); // Força re-render para centralizar
+                      }
                     }}
-                    disabled={isFetching}
-                    className="bg-white p-3 rounded-2xl shadow-xl hover:bg-slate-50 active:scale-95 transition-all border-2 border-slate-100 group disabled:opacity-50"
-                    title="Atualizar Mapa"
+                    className={`bg-white p-3 rounded-2xl shadow-xl hover:bg-slate-50 active:scale-95 transition-all border-2 ${shouldFollowUser ? 'border-emerald-500 text-emerald-600' : 'border-slate-100 text-slate-400'}`}
+                    title="Centralizar em Mim"
                   >
-                    <RefreshCw className={`w-6 h-6 text-emerald-600 ${isFetching ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
+                    <MapIcon className="w-6 h-6" />
                   </button>
                 </div>
 
@@ -1842,23 +1955,14 @@ const App: React.FC = () => {
                     } 
                     zoom={13} 
                     style={{ height: '100%', width: '100%' }}
-                    scrollWheelZoom={false}
+                    scrollWheelZoom={true}
                   >
-                    {location && isValidCoord(location.lat) && isValidCoord(location.lon) && <MapViewUpdater center={[location.lat, location.lon]} />}
+                    <MapEvents onMoveStart={() => setShouldFollowUser(false)} />
+                    {location && isValidCoord(location.lat) && isValidCoord(location.lon) && shouldFollowUser && <MapViewUpdater center={[location.lat, location.lon]} />}
                     <TileLayer
                       attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                     />
-                    {location && isValidCoord(location.lat) && isValidCoord(location.lon) && (
-                      <Marker position={[location.lat, location.lon]} icon={userIcon || undefined}>
-                        <Popup>
-                          <div className="text-center p-1">
-                            <p className="font-black text-[10px] uppercase text-emerald-600">Sua Posição</p>
-                            <p className="text-[9px] font-bold text-slate-400">{location.address}</p>
-                          </div>
-                        </Popup>
-                      </Marker>
-                    )}
                     {(() => {
                       const points = history.filter(h => 
                         h.result && 
@@ -2045,7 +2149,57 @@ const App: React.FC = () => {
 
         {view === 'history' && (
           <div className="space-y-6 animate-in fade-in">
-            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] px-2">Scans Recentes</h3>
+            <div className="flex justify-between items-center px-2">
+              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Scans Recentes</h3>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => {
+                    setIsSelectionMode(!isSelectionMode);
+                    if (isSelectionMode) {
+                      setHistory(prev => prev.map(h => ({ ...h, selected: false })));
+                    }
+                  }}
+                  className={`flex items-center gap-2 text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full active:scale-95 transition-all ${isSelectionMode ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-400'}`}
+                >
+                  {isSelectionMode ? 'Cancelar Seleção' : 'Selecionar Vários'}
+                </button>
+                <button 
+                  onClick={() => fetchHistory(true)}
+                  disabled={isFetching}
+                  className="flex items-center gap-2 text-[9px] font-black text-emerald-600 uppercase tracking-widest bg-emerald-50 px-3 py-1.5 rounded-full active:scale-95 transition-all disabled:opacity-50"
+                >
+                  <RefreshCw size={12} className={isFetching ? 'animate-spin' : ''} />
+                  {isFetching ? 'Sincronizando...' : 'Sincronizar'}
+                </button>
+              </div>
+            </div>
+
+            {isSelectionMode && history.some(h => h.selected) && (
+              <div className="bg-emerald-600 p-4 rounded-3xl flex justify-between items-center animate-in slide-in-from-top-4">
+                <p className="text-white text-[10px] font-black uppercase tracking-widest">
+                  {history.filter(h => h.selected).length} itens selecionados
+                </p>
+                <button 
+                  onClick={() => {
+                    const selected = history.filter(h => h.selected);
+                    if (selected.length > 0) {
+                      // Usamos o primeiro como base para o relatório, mas passamos todos os selecionados
+                      setCurrentResult({ 
+                        ...selected[0].result, 
+                        capturedImage: selected[0].image, 
+                        timestamp: selected[0].timestamp,
+                        // Adicionamos uma propriedade customizada para o relatório em massa
+                        batchResults: selected.map(s => ({ ...s.result, capturedImage: s.image, timestamp: s.timestamp }))
+                      } as any);
+                      setView('report-setup');
+                    }
+                  }}
+                  className="bg-white text-emerald-600 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+                >
+                  Gerar Relatório em Massa
+                </button>
+              </div>
+            )}
             <div className="grid gap-4">
               {history.length === 0 ? (
                 <div className="bg-white p-12 rounded-[3rem] text-center border border-slate-100">
@@ -2054,16 +2208,41 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 history.map(entry => (
-                  <div key={entry.id} className="bg-white p-4 rounded-[3rem] border border-slate-100 flex gap-5 items-center shadow-sm active:scale-[0.98] transition-all relative group" onClick={() => { setCurrentResult({ ...entry.result, capturedImage: entry.image }); setView('result'); }}>
-                    <img 
-                      src={entry.image || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
-                      className="w-20 h-20 rounded-[2rem] object-cover shadow-inner" 
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        console.warn("[History] Erro ao carregar imagem:", entry.image?.substring(0, 50));
-                        (e.target as HTMLImageElement).src = 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem';
-                      }}
-                    />
+                  <div 
+                    key={entry.id} 
+                    className={`bg-white p-4 rounded-[3rem] border flex gap-5 items-center shadow-sm active:scale-[0.98] transition-all relative group ${entry.selected ? 'border-emerald-500 bg-emerald-50/30' : 'border-slate-100'}`} 
+                    onClick={() => { 
+                      if (isSelectionMode) {
+                        setHistory(prev => prev.map(h => h.id === entry.id ? { ...h, selected: !h.selected } : h));
+                      } else {
+                        setCurrentResult({ ...entry.result, id: entry.id, capturedImage: entry.image, timestamp: entry.timestamp }); 
+                        setView('result'); 
+                      }
+                    }}
+                  >
+                    {isSelectionMode && (
+                      <div className={`absolute -top-1 -left-1 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all z-10 ${entry.selected ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-slate-200'}`}>
+                        {entry.selected && <CheckCircle size={14} />}
+                      </div>
+                    )}
+                    <div className="relative">
+                      <img 
+                        src={entry.image || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
+                        className="w-20 h-20 rounded-[2rem] object-cover shadow-inner" 
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          console.warn("[History] Erro ao carregar imagem:", entry.image?.substring(0, 50));
+                          (e.target as HTMLImageElement).src = 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem';
+                        }}
+                      />
+                      <div className="absolute -bottom-1 -right-1 bg-white p-1 rounded-lg shadow-sm border border-slate-100">
+                        {entry.image?.startsWith('http') ? (
+                          <Database size={10} className="text-emerald-500" />
+                        ) : (
+                          <Zap size={10} className="text-amber-500" />
+                        )}
+                      </div>
+                    </div>
                     <div className="flex-1 overflow-hidden">
                       <p className="text-sm font-black text-slate-900 truncate mb-1">{entry.result.pest?.name || "Scan Desconhecido"}</p>
                       <div className="flex flex-col gap-1">
@@ -2138,8 +2317,26 @@ const App: React.FC = () => {
                   </div>
                   <div className="text-right">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Data e Hora</p>
-                    <p className="text-xs font-bold text-slate-800">{new Date().toLocaleDateString()} - {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                    <p className="text-xs font-bold text-slate-800">{new Date(currentResult.timestamp || Date.now()).toLocaleDateString()} - {new Date(currentResult.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                   </div>
+                </div>
+
+                {/* Quick Observation Field */}
+                <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm space-y-4">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                    <Info size={14} /> Observação Local / Área
+                  </label>
+                  <textarea 
+                    value={reportObservation}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setReportObservation(val);
+                      if (currentResult) setCurrentResult({ ...currentResult, observations: val });
+                    }}
+                    placeholder="Identifique o local, talhão ou área com ocorrência..."
+                    rows={2}
+                    className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl text-xs font-bold text-slate-800 placeholder:text-slate-300 focus:border-emerald-500 focus:bg-white transition-all outline-none resize-none"
+                  />
                 </div>
 
                 <PestBioCard pest={currentResult.pest} />
@@ -2269,11 +2466,41 @@ const App: React.FC = () => {
               </button>
               <div>
                 <h2 className="text-lg font-black text-slate-900 uppercase tracking-tight">Configurar Relatório</h2>
-                <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Preencha os dados adicionais</p>
+                <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">
+                  {currentResult.batchResults ? `Editando item ${activeBatchIndex + 1} de ${currentResult.batchResults.length}` : 'Preencha os dados adicionais'}
+                </p>
               </div>
             </div>
 
+            {/* Seletor de Pragas para Relatório em Massa */}
+            {currentResult.batchResults && currentResult.batchResults.length > 1 && (
+              <div className="flex gap-3 overflow-x-auto pb-4 px-1 scrollbar-hide">
+                {currentResult.batchResults.map((res, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setActiveBatchIndex(idx)}
+                    className={`shrink-0 w-16 h-16 rounded-2xl border-4 transition-all overflow-hidden ${
+                      activeBatchIndex === idx ? 'border-emerald-500 scale-110 shadow-lg' : 'border-white opacity-50 grayscale'
+                    }`}
+                  >
+                    <img src={res.capturedImage} className="w-full h-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="bg-white p-8 rounded-[3rem] shadow-xl border border-slate-100 space-y-8">
+              <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-3xl border border-slate-100">
+                <div className="w-12 h-12 rounded-2xl overflow-hidden shrink-0">
+                  <img src={currentResult.batchResults ? currentResult.batchResults[activeBatchIndex].capturedImage : currentResult.capturedImage} className="w-full h-full object-cover" />
+                </div>
+                <div>
+                  <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Editando Agora</p>
+                  <p className="text-xs font-black text-slate-800 uppercase tracking-tight">
+                    {currentResult.batchResults ? currentResult.batchResults[activeBatchIndex].pest?.name : currentResult.pest?.name}
+                  </p>
+                </div>
+              </div>
               <div className="space-y-4">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
                   <Globe size={14} /> Área Afetada (m² ou Hectares)
@@ -2281,7 +2508,18 @@ const App: React.FC = () => {
                 <input 
                   type="text" 
                   value={reportArea}
-                  onChange={(e) => setReportArea(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setReportArea(val);
+                    if (currentResult) {
+                      if (currentResult.batchResults) {
+                        currentResult.batchResults[activeBatchIndex].area = val;
+                        setCurrentResult({ ...currentResult });
+                      } else {
+                        setCurrentResult({ ...currentResult, area: val });
+                      }
+                    }
+                  }}
                   placeholder="Ex: 50 Hectares, Talhão 04"
                   className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl text-xs font-bold text-slate-800 placeholder:text-slate-300 focus:border-emerald-500 focus:bg-white transition-all outline-none"
                 />
@@ -2293,7 +2531,18 @@ const App: React.FC = () => {
                 </label>
                 <textarea 
                   value={reportMeasures}
-                  onChange={(e) => setReportMeasures(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setReportMeasures(val);
+                    if (currentResult) {
+                      if (currentResult.batchResults) {
+                        currentResult.batchResults[activeBatchIndex].measures = val;
+                        setCurrentResult({ ...currentResult });
+                      } else {
+                        setCurrentResult({ ...currentResult, measures: val });
+                      }
+                    }
+                  }}
                   placeholder="Descreva as ações já tomadas no local..."
                   rows={3}
                   className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl text-xs font-bold text-slate-800 placeholder:text-slate-300 focus:border-emerald-500 focus:bg-white transition-all outline-none resize-none"
@@ -2306,12 +2555,71 @@ const App: React.FC = () => {
                 </label>
                 <textarea 
                   value={reportObservation}
-                  onChange={(e) => setReportObservation(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setReportObservation(val);
+                    if (currentResult) {
+                      if (currentResult.batchResults) {
+                        currentResult.batchResults[activeBatchIndex].observations = val;
+                        setCurrentResult({ ...currentResult });
+                      } else {
+                        setCurrentResult({ ...currentResult, observations: val });
+                      }
+                    }
+                  }}
                   placeholder="Informações extras para o relatório técnico..."
                   rows={3}
                   className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl text-xs font-bold text-slate-800 placeholder:text-slate-300 focus:border-emerald-500 focus:bg-white transition-all outline-none resize-none"
                 />
               </div>
+
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                  <User size={14} /> Assinatura Eletrônica
+                </label>
+                <div className="flex flex-col gap-4">
+                  <div className="bg-slate-50 rounded-2xl border-2 border-slate-100 overflow-hidden relative">
+                    <SignatureCanvas 
+                      ref={sigCanvas}
+                      penColor='black'
+                      canvasProps={{
+                        className: 'w-full h-40 cursor-crosshair',
+                        style: { width: '100%', height: '160px' }
+                      }}
+                      onEnd={() => {
+                        if (sigCanvas.current) {
+                          setSignature(sigCanvas.current.toDataURL());
+                        }
+                      }}
+                    />
+                    <div className="absolute top-2 right-2 flex gap-2">
+                      <button 
+                        onClick={() => {
+                          sigCanvas.current?.clear();
+                          setSignature(null);
+                        }}
+                        className="p-2 bg-white text-slate-400 rounded-xl shadow-sm border border-slate-100 active:scale-95 transition-all"
+                        title="Limpar"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest text-center">Assine no campo acima para validar o relatório</p>
+                </div>
+              </div>
+
+              <button 
+                onClick={async () => {
+                  const target = currentResult.batchResults ? currentResult.batchResults[activeBatchIndex] : currentResult;
+                  await savePestDetails(target);
+                }}
+                disabled={loading}
+                className="w-full py-5 bg-white border-2 border-emerald-500 text-emerald-600 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-emerald-500/10 active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+              >
+                <Save size={14} />
+                {loading ? 'Salvando...' : 'Salvar Informações do Item'}
+              </button>
 
               <button 
                 onClick={() => setView('report')}
@@ -2362,7 +2670,7 @@ const App: React.FC = () => {
                     <ShieldCheck size={24} style={{ color: '#34d399' }} />
                   </div>
                   <div>
-                    <h2 className="text-xl font-black uppercase tracking-tighter" style={{ color: '#ffffff' }}>Certificado de Inspeção</h2>
+                    <h2 className="text-xl font-black uppercase tracking-tighter" style={{ color: '#ffffff' }}>{currentResult.batchResults ? 'Relatório Consolidado de Inspeção' : 'Certificado de Inspeção'}</h2>
                     <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: '#34d399' }}>PestScan Pro • Digital Report</p>
                   </div>
                 </div>
@@ -2379,137 +2687,231 @@ const App: React.FC = () => {
               </div>
 
               {/* Conteúdo do Relatório */}
-              <div className="p-10 space-y-10">
-                {/* Imagem da Evidência e Mapa */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-4">
-                    <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                      <ImageIcon size={14} /> Evidência Fotográfica
-                    </h3>
-                    <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner" style={{ borderColor: '#f8fafc' }}>
-                      <img 
-                        src={currentResult.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
-                        alt="Evidência" 
-                        className="w-full h-full object-cover"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          console.warn("[Report] Erro ao carregar imagem:", currentResult.capturedImage?.substring(0, 50));
-                          (e.target as HTMLImageElement).src = 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem';
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                      <Globe size={14} /> Mapa de Localização
-                    </h3>
-                    <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner relative group" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
-                      {currentResult.location && isValidCoord(currentResult.location.latitude) && isValidCoord(currentResult.location.longitude) ? (
-                        <>
-                          <img 
-                            src={`https://static-maps.yandex.ru/1.x/?lang=pt_BR&ll=${currentResult.location.longitude},${currentResult.location.latitude}&z=16&l=map&pt=${currentResult.location.longitude},${currentResult.location.latitude},pm2rdm`}
-                            alt="Mapa"
-                            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).src = `https://picsum.photos/seed/map-${currentResult.location?.latitude}/800/450`;
-                            }}
-                          />
-                          {/* Simulação de Heatmap */}
-                          <div className="absolute inset-0 pointer-events-none">
-                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 rounded-full blur-2xl animate-pulse" style={{ backgroundColor: 'rgba(239, 68, 68, 0.3)' }} />
-                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full blur-xl" style={{ backgroundColor: 'rgba(249, 115, 22, 0.4)' }} />
+              <div className="p-10 space-y-12">
+                
+                {/* Panorama Geral (Charts & Map) */}
+                <div className="space-y-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Mapa de Calor / Localização Geral */}
+                    <div className="space-y-4">
+                      <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                        <Globe size={14} /> Mapa de Ocorrências (Heatmap)
+                      </h3>
+                      <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner relative group" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
+                        {reportEntries.some(e => e.location && isValidCoord(e.location.latitude)) ? (
+                          <>
+                            {(() => {
+                              const validPoints = reportEntries.filter(e => e.location && isValidCoord(e.location.latitude));
+                              const center = validPoints[0].location!;
+                              const pointsStr = validPoints.map(p => `${p.location!.longitude},${p.location!.latitude},pm2rdm`).join('~');
+                              return (
+                                <img 
+                                  src={`https://static-maps.yandex.ru/1.x/?lang=pt_BR&ll=${center.longitude},${center.latitude}&z=14&l=map&pt=${pointsStr}`}
+                                  alt="Mapa Geral"
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).src = `https://picsum.photos/seed/map-consolidated/800/450`;
+                                  }}
+                                />
+                              );
+                            })()}
+                            {/* Simulação de Heatmap em Massa */}
+                            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                              {reportEntries.slice(0, 8).map((_, i) => (
+                                <div 
+                                  key={i}
+                                  className="absolute rounded-full blur-3xl animate-pulse" 
+                                  style={{ 
+                                    backgroundColor: i % 2 === 0 ? 'rgba(239, 68, 68, 0.25)' : 'rgba(249, 115, 22, 0.2)',
+                                    width: `${100 + Math.random() * 100}px`,
+                                    height: `${100 + Math.random() * 100}px`,
+                                    top: `${15 + Math.random() * 70}%`,
+                                    left: `${15 + Math.random() * 70}%`,
+                                    animationDelay: `${i * 0.4}s`,
+                                    animationDuration: `${3 + Math.random() * 2}s`
+                                  }} 
+                                />
+                              ))}
+                            </div>
+                            <div className="absolute bottom-4 left-4 backdrop-blur-md px-3 py-1.5 rounded-full border shadow-sm flex items-center gap-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.9)', borderColor: '#e2e8f0' }}>
+                              <div className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: '#ef4444' }} />
+                              <span className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#475569' }}>{reportEntries.length} Focos Identificados</span>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center" style={{ backgroundColor: '#f8fafc' }}>
+                            <Globe size={32} style={{ color: '#e2e8f0' }} className="mb-2" />
+                            <p className="text-[10px] font-black uppercase tracking-widest leading-tight" style={{ color: '#94a3b8' }}>Localização não disponível</p>
                           </div>
-                          <div className="absolute bottom-4 left-4 backdrop-blur-md px-3 py-1.5 rounded-full border shadow-sm flex items-center gap-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.9)', borderColor: '#e2e8f0' }}>
-                            <div className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: '#ef4444' }} />
-                            <span className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#475569' }}>Foco de Infestação Detectado</span>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center" style={{ backgroundColor: '#f8fafc' }}>
-                          <Globe size={32} style={{ color: '#e2e8f0' }} className="mb-2" />
-                          <p className="text-[10px] font-black uppercase tracking-widest leading-tight" style={{ color: '#94a3b8' }}>Coordenadas de GPS<br/>não vinculadas ao registro</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Dados da Identificação */}
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <p className="text-[9px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Praga Identificada</p>
-                    <p className="text-sm font-black uppercase tracking-tight" style={{ color: '#0f172a' }}>{currentResult.pest?.name || 'Não Identificado'}</p>
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-[9px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Nível de Confiança</p>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ backgroundColor: '#f1f5f9' }}>
-                        <div 
-                          className="h-full rounded-full" 
-                          style={{ width: `${currentResult.confidence * 100}%`, backgroundColor: '#10b981' }}
-                        />
+                        )}
                       </div>
-                      <span className="text-[10px] font-black" style={{ color: '#059669' }}>{(currentResult.confidence * 100).toFixed(1)}%</span>
+                    </div>
+
+                    {/* Gráfico de Distribuição */}
+                    <div className="space-y-4">
+                      <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                        <Activity size={14} /> Distribuição por Espécie
+                      </h3>
+                      <div className="aspect-video w-full bg-slate-50 rounded-[2rem] p-6 border border-slate-100">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={reportChartData}>
+                            <XAxis dataKey="name" hide />
+                            <YAxis hide />
+                            <Tooltip 
+                              contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                              labelStyle={{ fontWeight: '900', fontSize: '10px', textTransform: 'uppercase' }}
+                            />
+                            <Bar dataKey="count" radius={[10, 10, 10, 10]}>
+                              {reportChartData.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={index === 0 ? '#10b981' : '#94a3b8'} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="h-px" style={{ backgroundColor: '#f1f5f9' }} />
-
-                {/* Campos Adicionais */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  {/* Medidas Preventivas Sugeridas (Consolidado) */}
                   <div className="space-y-4">
                     <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                      <Search size={14} /> Detalhes da Área
+                      <ShieldCheck size={14} /> Medidas Preventivas Recomendadas
                     </h3>
-                    <div className="p-6 rounded-3xl border border-slate-100" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
-                      <p className="text-[8px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
-                      <p className="text-xs font-bold" style={{ color: '#1e293b' }}>{reportArea || 'Não informado'}</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {(() => {
+                        const allMeasures = Array.from(new Set(reportEntries.flatMap(e => e.pest?.controlMethods || []))).slice(0, 6);
+                        if (allMeasures.length === 0) return <p className="text-[10px] font-bold text-slate-400 italic">Nenhuma recomendação específica disponível.</p>;
+                        return allMeasures.map((measure, i) => (
+                          <div key={i} className="flex items-start gap-3 p-4 rounded-2xl bg-emerald-50/30 border border-emerald-100/50">
+                            <div className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5">
+                              <Check size={10} />
+                            </div>
+                            <p className="text-[10px] font-bold text-emerald-900 leading-tight">{measure}</p>
+                          </div>
+                        ));
+                      })()}
                     </div>
                   </div>
+                </div>
+
+                <div className="h-px w-full" style={{ backgroundColor: '#f1f5f9' }} />
+
+                {/* Detalhamento Individual de cada Praga */}
+                <div className="space-y-16">
+                  <h3 className="text-xs font-black uppercase tracking-[0.3em] text-center" style={{ color: '#0f172a' }}>Detalhamento Técnico por Ocorrência</h3>
+                  
+                  {reportEntries.map((entry, index) => (
+                    <div key={entry.id || index} className="space-y-8 pb-16 border-b border-slate-50 last:border-0 last:pb-0">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-4">
+                          <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-black">
+                            {String(index + 1).padStart(2, '0')}
+                          </div>
+                          <h4 className="text-sm font-black uppercase tracking-tight" style={{ color: '#1e293b' }}>
+                            {entry.pest?.name || 'Scan Desconhecido'}
+                          </h4>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest" style={{ backgroundColor: '#f1f5f9', color: '#64748b' }}>
+                            Confiança: {(entry.confidence * 100).toFixed(1)}%
+                          </div>
+                          <div className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest ${
+                            entry.pest?.riskLevel === 'Crítico' || entry.pest?.riskLevel === 'Alto' ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'
+                          }`}>
+                            Risco: {entry.pest?.riskLevel || 'Moderado'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                        {/* Imagem */}
+                        <div className="space-y-3">
+                          <p className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Evidência Fotográfica</p>
+                          <div className="aspect-square rounded-3xl overflow-hidden border-2 border-slate-50 shadow-sm relative group">
+                            <img 
+                              src={entry.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </div>
+                        </div>
+
+                        {/* Informações Técnicas */}
+                        <div className="md:col-span-2 space-y-6">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="p-4 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                              <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
+                              <p className="text-[11px] font-bold" style={{ color: '#1e293b' }}>{entry.area || 'Não informado'}</p>
+                            </div>
+                            <div className="p-4 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                              <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Localização</p>
+                              <p className="text-[10px] font-bold truncate" style={{ color: '#1e293b' }}>{entry.location?.address || 'GPS indisponível'}</p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-4">
+                            <div className="space-y-2">
+                              <p className="text-[8px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                                <Activity size={10} /> Medidas Realizadas
+                              </p>
+                              <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                                <p className="text-[11px] font-medium leading-relaxed" style={{ color: '#334155' }}>
+                                  {entry.measures || 'Nenhuma medida registrada.'}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <p className="text-[8px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                                <Info size={10} /> Observações do Técnico
+                              </p>
+                              <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                                <p className="text-[11px] font-medium leading-relaxed whitespace-pre-wrap" style={{ color: '#334155' }}>
+                                  {entry.observations || 'Sem observações adicionais.'}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="h-px w-full" style={{ backgroundColor: '#f1f5f9' }} />
+
+                {/* Dados Técnicos e Assinatura */}
+                <div className="mt-12 pt-12 border-t border-slate-100 grid grid-cols-2 gap-8" style={{ borderColor: '#f1f5f9' }}>
                   <div className="space-y-4">
                     <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                      <Activity size={14} /> Medidas Realizadas
+                      <User size={14} /> Responsável Técnico
                     </h3>
-                    <div className="p-6 rounded-3xl border border-slate-100" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
-                      <p className="text-xs font-bold leading-relaxed" style={{ color: '#334155' }}>{reportMeasures || 'Nenhuma medida registrada no momento da inspeção.'}</p>
+                    <div className="space-y-1">
+                      <p className="text-sm font-black text-slate-900">Juan Nicolas Terra</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Técnico em Agropecuária</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Conselho CFTA</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Registro Nº 40222945826</p>
                     </div>
                   </div>
-                </div>
-
-                {/* Observações */}
-                <div className="space-y-4">
-                  <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                    <Info size={14} /> Observações do Técnico
-                  </h3>
-                  <div className="p-6 rounded-3xl border border-slate-100" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
-                    <p className="text-xs font-bold leading-relaxed whitespace-pre-wrap" style={{ color: '#334155' }}>{reportObservation || 'Sem observações adicionais.'}</p>
+                  <div className="flex flex-col items-center justify-end">
+                    {signature ? (
+                      <div className="w-48 h-20 border-b-2 border-slate-900 flex items-center justify-center">
+                        <img src={signature} alt="Assinatura" className="max-h-full object-contain" />
+                      </div>
+                    ) : (
+                      <div className="w-48 h-20 border-b-2 border-slate-200 flex items-center justify-center">
+                        <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Assinatura Digital</p>
+                      </div>
+                    )}
+                    <p className="mt-2 text-[8px] font-black text-slate-400 uppercase tracking-widest">Assinatura do Técnico</p>
                   </div>
                 </div>
 
-                {/* Localização Texto */}
-                <div className="space-y-4">
-                  <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                    <Globe size={14} /> Endereço de Captura
-                  </h3>
-                  <div className="p-6 rounded-3xl border border-slate-100 flex justify-between items-center" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
-                    <p className="text-xs font-bold flex-1 pr-4" style={{ color: '#334155' }}>
-                      {currentResult.location?.address || 'Localização não disponível'}
-                    </p>
-                    <div className="text-right shrink-0">
-                      <p className="text-[8px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Coordenadas</p>
-                      <p className="text-[10px] font-mono font-bold" style={{ color: '#475569' }}>{currentResult.location?.latitude.toFixed(6)}, {currentResult.location?.longitude.toFixed(6)}</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Assinatura Digital */}
                 <div className="pt-10 flex flex-col items-center border-t" style={{ borderColor: '#f1f5f9' }}>
-                  <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-xl" style={{ backgroundColor: '#0f172a' }}>
-                    <Bug size={32} className="text-emerald-400" />
+                  <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-4 shadow-lg" style={{ backgroundColor: '#0f172a' }}>
+                    <Bug size={24} className="text-emerald-400" />
                   </div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.3em]" style={{ color: '#0f172a' }}>PestScan Pro AI</p>
-                  <p className="text-[8px] font-black uppercase tracking-widest mt-1" style={{ color: '#94a3b8' }}>Autenticação Biométrica Digital</p>
+                  <p className="text-[8px] font-black uppercase tracking-[0.3em]" style={{ color: '#0f172a' }}>PestScan Pro AI • Certificado Digital</p>
                 </div>
               </div>
             </div>
