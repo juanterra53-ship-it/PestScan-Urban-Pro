@@ -443,7 +443,7 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
           model: currentModel,
           contents: {
             parts: [
-              { text: "Identifique a praga urbana nesta imagem. Forneça uma ficha técnica biológica completa (nome, científico, hábitos, controle, riscos). Retorne um JSON estrito seguindo o esquema." },
+              { text: "Identifique a praga urbana nesta imagem. Forneça uma ficha técnica biológica completa incluindo: nome, nome científico, categoria, nível de risco, características, anatomia, membros, hábitos, reprodução, fase larval, métodos de controle, medidas físicas, medidas químicas (incluindo princípios ativos e dosagens recomendadas) e riscos à saúde/interesse médico. Retorne um JSON estrito seguindo o esquema." },
               { inlineData: { mimeType: "image/jpeg", data: base64 } }
             ]
           },
@@ -510,7 +510,7 @@ export const analyzePestByName = async (pestName: string): Promise<RecognitionRe
 
     const response = await ai.models.generateContent({
       model: model, 
-      contents: `Forneça uma ficha técnica biológica completa da praga urbana: "${pestName}". ${useSearch ? 'Use o Google Search para dados reais.' : 'Use seu conhecimento interno.'} Retorne JSON.`,
+      contents: `Forneça uma ficha técnica biológica completa da praga urbana: "${pestName}". Inclua detalhes sobre anatomia, hábitos, reprodução, fase larval, métodos de controle, medidas físicas, medidas químicas (com princípios ativos e dosagens) e riscos à saúde. ${useSearch ? 'Use o Google Search para dados reais e atualizados.' : 'Use seu conhecimento interno.'} Retorne JSON.`,
       config: config
     });
     
