@@ -103,7 +103,6 @@ export default defineConfig(({ mode }) => {
       alias: {
         'react-leaflet': 'react-leaflet',
         'leaflet': 'leaflet',
-        'react-signature-canvas': 'react-signature-canvas',
       }
     },
     base: '/', // Standard for Vercel to avoid path issues
