@@ -2934,22 +2934,21 @@ const App: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-8">
+                      <div className="flex flex-col md:flex-row gap-8 items-start">
                         {/* Imagem */}
-                        <div className="space-y-3">
+                        <div className="w-full md:w-[200px] shrink-0 space-y-3">
                           <p className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Evidência Fotográfica</p>
-                          <div className="w-full aspect-square rounded-3xl overflow-hidden border-2 border-slate-50 shadow-sm relative group">
+                          <div className="w-full aspect-square rounded-3xl overflow-hidden border-2 border-slate-50 shadow-sm relative group bg-slate-50">
                             <img 
                               src={entry.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
                               className="w-full h-full object-cover"
                               referrerPolicy="no-referrer"
                             />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                           </div>
                         </div>
 
                         {/* Informações Técnicas */}
-                        <div className="space-y-6">
+                        <div className="flex-1 space-y-6">
                           <div className="grid grid-cols-2 gap-4">
                             <div className="p-4 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
                               <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
