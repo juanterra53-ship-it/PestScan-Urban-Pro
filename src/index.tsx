@@ -28,7 +28,7 @@ import { toPng } from 'html-to-image';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { registerSW } from 'virtual:pwa-register';
-import SignatureCanvas from 'react-signature-canvas';
+import SignaturePad from 'signature_pad';
 import './index.css';
 import { supabase } from './supabaseClient';
 import PestScanPrivacy from './legal/PestScanPrivacy';
@@ -383,7 +383,17 @@ const App: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reportRef = useRef<HTMLDivElement>(null);
-  const sigCanvas = useRef<SignatureCanvas>(null);
+  const sigCanvas = useRef<HTMLCanvasElement>(null);
+  const signaturePadRef = useRef<SignaturePad | null>(null);
+
+  useEffect(() => {
+    if (sigCanvas.current && !signaturePadRef.current) {
+      signaturePadRef.current = new SignaturePad(sigCanvas.current, {
+        backgroundColor: 'rgba(255, 255, 255, 0)',
+        penColor: '#064e3b'
+      });
+    }
+  }, [view]);
 
   // Monitoramento de conexão
   useEffect(() => {
@@ -2598,24 +2608,28 @@ const App: React.FC = () => {
                 </label>
                 <div className="flex flex-col gap-4">
                   <div className="bg-slate-50 rounded-2xl border-2 border-slate-100 overflow-hidden relative">
-                    <SignatureCanvas 
+                    <canvas 
                       ref={sigCanvas}
-                      penColor='black'
-                      canvasProps={{
-                        className: 'w-full h-40 cursor-crosshair',
-                        style: { width: '100%', height: '160px' }
+                      className="w-full h-40 cursor-crosshair"
+                      style={{ width: '100%', height: '160px' }}
+                      onMouseUp={() => {
+                        if (signaturePadRef.current) {
+                          setSignature(signaturePadRef.current.toDataURL());
+                        }
                       }}
-                      onEnd={() => {
-                        if (sigCanvas.current) {
-                          setSignature(sigCanvas.current.toDataURL());
+                      onTouchEnd={() => {
+                        if (signaturePadRef.current) {
+                          setSignature(signaturePadRef.current.toDataURL());
                         }
                       }}
                     />
                     <div className="absolute top-2 right-2 flex gap-2">
                       <button 
                         onClick={() => {
-                          sigCanvas.current?.clear();
-                          setSignature(null);
+                          if (signaturePadRef.current) {
+                            signaturePadRef.current.clear();
+                            setSignature(null);
+                          }
                         }}
                         className="p-2 bg-white text-slate-400 rounded-xl shadow-sm border border-slate-100 active:scale-95 transition-all"
                         title="Limpar"
