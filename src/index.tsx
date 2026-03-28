@@ -693,18 +693,46 @@ const App: React.FC = () => {
       element.style.width = '1024px';
       element.style.maxWidth = 'none';
       element.style.position = 'fixed';
-      element.style.left = '-10000px';
+      element.style.left = '0';
       element.style.top = '0';
-      element.style.zIndex = '-1';
+      element.style.zIndex = '-9999';
+      element.style.visibility = 'visible';
+      element.style.display = 'block';
+      element.style.opacity = '1';
       element.style.backgroundColor = '#ffffff';
       
       // Aguarda renderização e carregamento de imagens (especialmente o mapa estático)
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 2000));
       
-      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
       let canvas;
       try {
+        // Tenta toPng primeiro, pois é mais confiável para mapas e CSS complexo
+        const dataUrl = await toPng(element, {
+          quality: 1,
+          backgroundColor: '#ffffff',
+          pixelRatio: 2,
+          cacheBust: true,
+          skipFonts: true, // Melhora performance e evita erros de CORS em fontes
+        });
+        
+        const img = new Image();
+        img.src = dataUrl;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+        
+        canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+        }
+      } catch (e) {
+        console.warn("toPng falhou, tentando html2canvas:", e);
         canvas = await html2canvas(element, {
           useCORS: true,
           allowTaint: true,
@@ -714,24 +742,13 @@ const App: React.FC = () => {
           width: 1024,
           onclone: (clonedDoc) => {
             const el = clonedDoc.querySelector('[data-report-container]');
-            if (el) (el as HTMLElement).style.display = 'block';
+            if (el) {
+              (el as HTMLElement).style.display = 'block';
+              (el as HTMLElement).style.visibility = 'visible';
+              (el as HTMLElement).style.opacity = '1';
+            }
           }
         });
-      } catch (e) {
-        console.warn("html2canvas falhou, tentando toPng:", e);
-        const dataUrl = await toPng(element, {
-          quality: 0.95,
-          backgroundColor: '#ffffff',
-          pixelRatio: 2,
-          cacheBust: true,
-        });
-        const img = new Image();
-        img.src = dataUrl;
-        await new Promise(r => img.onload = r);
-        canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        canvas.getContext('2d')?.drawImage(img, 0, 0);
       }
 
       const pdf = new jsPDF({
@@ -831,7 +848,7 @@ const App: React.FC = () => {
     const sharePdf = async () => {
       const pdfFile = new File([generatedPdfBlob], fileName, { type: 'application/pdf' });
       try {
-        if (navigator.share) {
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
           await navigator.share({
             title: 'Relatório PestScan Pro',
             text: `Confira a identificação da praga: ${currentResult?.pest?.name}`,
@@ -839,6 +856,9 @@ const App: React.FC = () => {
           });
           showToast("Compartilhado com sucesso!", "success");
           setIsPdfModalOpen(false);
+        } else {
+          // Fallback se não puder compartilhar arquivos
+          downloadPdf();
         }
       } catch (err) {
         console.error("Erro ao compartilhar do modal:", err);
