@@ -294,6 +294,7 @@ const App: React.FC = () => {
     return Object.keys(counts).map(name => ({ name, count: counts[name] })).sort((a, b) => b.count - a.count);
   }, [history]);
 
+  const [mapMode, setMapMode] = useState<'street' | 'satellite'>('street');
   const [activeBatchIndex, setActiveBatchIndex] = useState(0);
 
   // Sincroniza campos do relatório com o resultado atual
@@ -1926,7 +1927,18 @@ const App: React.FC = () => {
 
                 <div className="w-full h-[400px] rounded-[2.5rem] overflow-hidden border-4 border-slate-50 shadow-inner relative z-10">
                 {/* Manual Refresh Button - Removed extra one for cleaner UI */}
-                <div className="absolute top-4 right-4 z-[2000]">
+                <div className="absolute top-4 right-4 z-[2000] flex flex-col gap-2">
+                  <button 
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setMapMode(prev => prev === 'street' ? 'satellite' : 'street');
+                    }}
+                    className={`bg-white p-3 rounded-2xl shadow-xl hover:bg-slate-50 active:scale-95 transition-all border-2 ${mapMode === 'satellite' ? 'border-amber-500 text-amber-600' : 'border-slate-100 text-slate-400'}`}
+                    title={mapMode === 'satellite' ? "Mudar para Mapa" : "Mudar para Satélite"}
+                  >
+                    <Globe className="w-6 h-6" />
+                  </button>
                   <button 
                     onClick={(e) => {
                       e.preventDefault();
@@ -1959,10 +1971,17 @@ const App: React.FC = () => {
                   >
                     <MapEvents onMoveStart={() => setShouldFollowUser(false)} />
                     {location && isValidCoord(location.lat) && isValidCoord(location.lon) && shouldFollowUser && <MapViewUpdater center={[location.lat, location.lon]} />}
-                    <TileLayer
-                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    />
+                    {mapMode === 'street' ? (
+                      <TileLayer
+                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                      />
+                    ) : (
+                      <TileLayer
+                        attribution='Map data &copy; Google Satellite 2026'
+                        url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
+                      />
+                    )}
                     {(() => {
                       const points = history.filter(h => 
                         h.result && 
@@ -2611,8 +2630,7 @@ const App: React.FC = () => {
 
               <button 
                 onClick={async () => {
-                  const target = currentResult.batchResults ? currentResult.batchResults[activeBatchIndex] : currentResult;
-                  await savePestDetails(target);
+                  await savePestDetails();
                 }}
                 disabled={loading}
                 className="w-full py-5 bg-white border-2 border-emerald-500 text-emerald-600 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-emerald-500/10 active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
@@ -2784,7 +2802,7 @@ const App: React.FC = () => {
                         return allMeasures.map((measure, i) => (
                           <div key={i} className="flex items-start gap-3 p-4 rounded-2xl bg-emerald-50/30 border border-emerald-100/50">
                             <div className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5">
-                              <Check size={10} />
+                              <CheckCircle size={10} />
                             </div>
                             <p className="text-[10px] font-bold text-emerald-900 leading-tight">{measure}</p>
                           </div>
