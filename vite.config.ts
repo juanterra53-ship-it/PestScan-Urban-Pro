@@ -94,10 +94,10 @@ export default defineConfig(({ mode }) => {
       })
     ],
     optimizeDeps: {
-      include: ['react-leaflet', 'leaflet', 'react-signature-canvas']
+      include: ['react-leaflet', 'leaflet']
     },
     ssr: {
-      noExternal: ['react-leaflet', 'leaflet', 'react-signature-canvas']
+      noExternal: ['react-leaflet', 'leaflet']
     },
     resolve: {
       alias: {
