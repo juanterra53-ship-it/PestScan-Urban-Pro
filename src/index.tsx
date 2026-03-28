@@ -754,13 +754,32 @@ const App: React.FC = () => {
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'px',
-        format: [canvas.width, canvas.height]
+        format: 'a4'
       });
 
-      pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, canvas.width, canvas.height, undefined, 'FAST');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      
+      // Calcula a escala para caber na largura da página A4
+      const ratio = pageWidth / imgWidth;
+      const finalWidth = pageWidth;
+      const finalHeight = imgHeight * ratio;
+
+      // Se o relatório for maior que uma página, ele será comprimido em uma página A4 longa
+      // ou podemos criar múltiplas páginas. Para relatórios técnicos, uma página longa é comum em apps.
+      // Mas para jsPDF 'a4' é fixo. Vamos ajustar o formato para ser dinâmico mas com largura de A4.
+      const dynamicPdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: [pageWidth, finalHeight]
+      });
+
+      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, 'FAST');
       
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
-      const pdfBlob = pdf.output('blob');
+      const pdfBlob = dynamicPdf.output('blob');
       
       return { blob: pdfBlob, fileName };
     } catch (e) {
@@ -831,18 +850,37 @@ const App: React.FC = () => {
     const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
 
     const downloadPdf = () => {
-      const url = URL.createObjectURL(generatedPdfBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      setTimeout(() => {
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      }, 1000);
-      showToast("Download iniciado!", "success");
-      setIsPdfModalOpen(false);
+      try {
+        const url = URL.createObjectURL(generatedPdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        
+        // Fallback para Android WebView que bloqueia blob downloads
+        setTimeout(() => {
+          if (document.body.contains(link)) {
+            document.body.removeChild(link);
+          }
+          URL.revokeObjectURL(url);
+        }, 1000);
+        
+        showToast("Download iniciado!", "success");
+        setIsPdfModalOpen(false);
+      } catch (err) {
+        console.error("Erro no download:", err);
+        // Tenta via data URL se blob falhar (comum em alguns Androids)
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          const link = document.createElement('a');
+          link.href = base64data;
+          link.download = fileName;
+          link.click();
+        };
+        reader.readAsDataURL(generatedPdfBlob);
+      }
     };
 
     const sharePdf = async () => {
@@ -2896,11 +2934,11 @@ const App: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                      <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-8">
                         {/* Imagem */}
                         <div className="space-y-3">
                           <p className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Evidência Fotográfica</p>
-                          <div className="aspect-square rounded-3xl overflow-hidden border-2 border-slate-50 shadow-sm relative group">
+                          <div className="w-full aspect-square rounded-3xl overflow-hidden border-2 border-slate-50 shadow-sm relative group">
                             <img 
                               src={entry.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
                               className="w-full h-full object-cover"
@@ -2911,7 +2949,7 @@ const App: React.FC = () => {
                         </div>
 
                         {/* Informações Técnicas */}
-                        <div className="md:col-span-2 space-y-6">
+                        <div className="space-y-6">
                           <div className="grid grid-cols-2 gap-4">
                             <div className="p-4 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
                               <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
