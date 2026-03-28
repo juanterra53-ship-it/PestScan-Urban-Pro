@@ -851,6 +851,7 @@ const App: React.FC = () => {
 
     const downloadPdf = () => {
       try {
+        // Método 1: Blob URL (Padrão)
         const url = URL.createObjectURL(generatedPdfBlob);
         const link = document.createElement('a');
         link.href = url;
@@ -858,28 +859,22 @@ const App: React.FC = () => {
         document.body.appendChild(link);
         link.click();
         
-        // Fallback para Android WebView que bloqueia blob downloads
-        setTimeout(() => {
-          if (document.body.contains(link)) {
-            document.body.removeChild(link);
-          }
-          URL.revokeObjectURL(url);
-        }, 1000);
+        // Método 2: Fallback imediato para Data URI (Melhor para Android WebView)
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          const a = document.createElement('a');
+          a.href = base64data;
+          a.download = fileName;
+          a.click();
+        };
+        reader.readAsDataURL(generatedPdfBlob);
         
         showToast("Download iniciado!", "success");
         setIsPdfModalOpen(false);
       } catch (err) {
-        console.error("Erro no download:", err);
-        // Tenta via data URL se blob falhar (comum em alguns Androids)
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64data = reader.result as string;
-          const link = document.createElement('a');
-          link.href = base64data;
-          link.download = fileName;
-          link.click();
-        };
-        reader.readAsDataURL(generatedPdfBlob);
+        console.error("Erro crítico no download:", err);
+        showToast("Erro ao baixar. Tente compartilhar.", "error");
       }
     };
 
@@ -2934,52 +2929,62 @@ const App: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="flex flex-col md:flex-row gap-8 items-start">
-                        {/* Imagem */}
-                        <div className="w-full md:w-[200px] shrink-0 space-y-3">
-                          <p className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Evidência Fotográfica</p>
-                          <div className="w-full aspect-square rounded-3xl overflow-hidden border-2 border-slate-50 shadow-sm relative group bg-slate-50">
-                            <img 
-                              src={entry.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
-                              className="w-full h-full object-cover"
-                              referrerPolicy="no-referrer"
-                            />
+                      <div className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-8">
+                          {/* Imagem */}
+                          <div className="space-y-3">
+                            <p className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Evidência Fotográfica</p>
+                            <div className="w-full aspect-square rounded-3xl overflow-hidden border-2 border-slate-50 shadow-sm relative group">
+                              <img 
+                                src={entry.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Informações Rápidas */}
+                          <div className="space-y-4 flex flex-col justify-center">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                                <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
+                                <p className="text-[12px] font-bold" style={{ color: '#1e293b' }}>{entry.area || 'Não informado'}</p>
+                              </div>
+                              <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                                <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Localização</p>
+                                <p className="text-[11px] font-bold" style={{ color: '#1e293b' }}>{entry.location?.address || 'GPS indisponível'}</p>
+                              </div>
+                            </div>
+                            <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                              <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Coordenadas GPS</p>
+                              <p className="text-[10px] font-mono font-bold" style={{ color: '#64748b' }}>
+                                {entry.location?.latitude ? `${entry.location.latitude.toFixed(6)}, ${entry.location.longitude.toFixed(6)}` : 'N/A'}
+                              </p>
+                            </div>
                           </div>
                         </div>
 
-                        {/* Informações Técnicas */}
-                        <div className="flex-1 space-y-6">
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="p-4 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                              <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
-                              <p className="text-[11px] font-bold" style={{ color: '#1e293b' }}>{entry.area || 'Não informado'}</p>
-                            </div>
-                            <div className="p-4 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                              <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Localização</p>
-                              <p className="text-[10px] font-bold truncate" style={{ color: '#1e293b' }}>{entry.location?.address || 'GPS indisponível'}</p>
+                        {/* Descrições Detalhadas - Agora em largura total para máxima visibilidade */}
+                        <div className="space-y-6">
+                          <div className="space-y-2">
+                            <p className="text-[9px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                              <Activity size={12} /> Medidas Realizadas e Ações Corretivas
+                            </p>
+                            <div className="p-6 rounded-3xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                              <p className="text-[13px] font-medium leading-relaxed" style={{ color: '#334155' }}>
+                                {entry.measures || 'Nenhuma medida registrada.'}
+                              </p>
                             </div>
                           </div>
-
-                          <div className="space-y-4">
-                            <div className="space-y-2">
-                              <p className="text-[8px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                                <Activity size={10} /> Medidas Realizadas
+                          
+                          <div className="space-y-2">
+                            <p className="text-[9px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                              <Info size={12} /> Observações Adicionais do Técnico
+                            </p>
+                            <div className="p-6 rounded-3xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                              <p className="text-[13px] font-medium leading-relaxed whitespace-pre-wrap" style={{ color: '#334155' }}>
+                                {entry.observations || 'Sem observações adicionais.'}
                               </p>
-                              <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                                <p className="text-[11px] font-medium leading-relaxed" style={{ color: '#334155' }}>
-                                  {entry.measures || 'Nenhuma medida registrada.'}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="space-y-2">
-                              <p className="text-[8px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                                <Info size={10} /> Observações do Técnico
-                              </p>
-                              <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                                <p className="text-[11px] font-medium leading-relaxed whitespace-pre-wrap" style={{ color: '#334155' }}>
-                                  {entry.observations || 'Sem observações adicionais.'}
-                                </p>
-                              </div>
                             </div>
                           </div>
                         </div>
