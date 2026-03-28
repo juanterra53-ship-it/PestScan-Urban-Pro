@@ -94,15 +94,16 @@ export default defineConfig(({ mode }) => {
       })
     ],
     optimizeDeps: {
-      include: ['react-leaflet', 'leaflet']
+      include: ['react-leaflet', 'leaflet', 'react-signature-canvas']
     },
     ssr: {
-      noExternal: ['react-leaflet', 'leaflet']
+      noExternal: ['react-leaflet', 'leaflet', 'react-signature-canvas']
     },
     resolve: {
       alias: {
         'react-leaflet': 'react-leaflet',
         'leaflet': 'leaflet',
+        'react-signature-canvas': 'react-signature-canvas',
       }
     },
     base: '/', // Standard for Vercel to avoid path issues
