@@ -28,7 +28,7 @@ import { toPng } from 'html-to-image';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { registerSW } from 'virtual:pwa-register';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import SignaturePad from 'signature_pad';
 import './index.css';
 import { supabase } from './supabaseClient';
