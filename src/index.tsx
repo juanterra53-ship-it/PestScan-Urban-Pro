@@ -28,6 +28,7 @@ import { toPng } from 'html-to-image';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { registerSW } from 'virtual:pwa-register';
+import { motion, AnimatePresence } from 'motion/react';
 import SignaturePad from 'signature_pad';
 import './index.css';
 import { supabase } from './supabaseClient';
@@ -379,6 +380,8 @@ const App: React.FC = () => {
   }, []);
   
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [generatedPdfBlob, setGeneratedPdfBlob] = useState<Blob | null>(null);
+  const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -666,15 +669,13 @@ const App: React.FC = () => {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const handleDownloadOnly = async () => {
+  const generatePDF = async (): Promise<{ blob: Blob, fileName: string } | null> => {
     if (!currentResult || !currentResult.pest || !reportRef.current) {
-      showToast("Relatório não pronto. Tente novamente.", "error");
-      return;
+      showToast("Relatório não pronto.", "error");
+      return null;
     }
     
-    showToast("Gerando PDF profissional...", "info");
     setIsGeneratingPDF(true);
-    
     const originalStyle = {
       width: reportRef.current.style.width,
       maxWidth: reportRef.current.style.maxWidth,
@@ -697,13 +698,13 @@ const App: React.FC = () => {
       element.style.zIndex = '-1';
       element.style.backgroundColor = '#ffffff';
       
-      await new Promise(r => setTimeout(r, 2000));
+      // Aguarda renderização e carregamento de imagens (especialmente o mapa estático)
+      await new Promise(r => setTimeout(r, 1500));
       
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
       let canvas;
       try {
-        // Tenta html2canvas primeiro com configurações de alta fidelidade
         canvas = await html2canvas(element, {
           useCORS: true,
           allowTaint: true,
@@ -742,30 +743,13 @@ const App: React.FC = () => {
       pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, canvas.width, canvas.height, undefined, 'FAST');
       
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
+      const pdfBlob = pdf.output('blob');
       
-      // Método de download mais robusto para mobile/iframes
-      try {
-        pdf.save(fileName);
-      } catch (saveError) {
-        console.warn("pdf.save falhou, tentando blob:", saveError);
-        const pdfBlob = pdf.output('blob');
-        const url = URL.createObjectURL(pdfBlob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        
-        setTimeout(() => {
-          document.body.removeChild(link);
-          URL.revokeObjectURL(url);
-        }, 1000);
-      }
-
-      showToast("Download concluído!", "success");
+      return { blob: pdfBlob, fileName };
     } catch (e) {
-      console.error("Erro PDF:", e);
-      showToast("Falha ao gerar PDF. Tente novamente.", "error");
+      console.error("Erro ao gerar PDF:", e);
+      showToast("Falha ao gerar PDF profissional.", "error");
+      return null;
     } finally {
       if (reportRef.current) {
         Object.assign(reportRef.current.style, originalStyle);
@@ -774,100 +758,136 @@ const App: React.FC = () => {
     }
   };
 
-  const handleShare = async () => {
-    if (!currentResult || !currentResult.pest || !reportRef.current) {
-      showToast("Relatório não pronto.", "error");
-      return;
-    }
+  const handleDownloadOnly = async () => {
+    const result = await generatePDF();
+    if (!result) return;
+
+    const { blob, fileName } = result;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
     
-    showToast("Gerando PDF para compartilhar...", "info");
-    setIsGeneratingPDF(true);
+    setTimeout(() => {
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, 1000);
+
+    showToast("Download concluído!", "success");
+  };
+
+  const handleShare = async () => {
+    const result = await generatePDF();
+    if (!result) return;
+
+    const { blob, fileName } = result;
+    const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
+
+    // Tenta compartilhar diretamente primeiro
     try {
-      const element = reportRef.current;
-      element.scrollIntoView();
-      await new Promise(r => setTimeout(r, 1000));
-
-      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-      let canvas;
-      try {
-        canvas = await html2canvas(element, {
-          useCORS: true,
-          allowTaint: true,
-          scale: isMobile ? 1.0 : 1.5,
-          backgroundColor: '#ffffff',
-          logging: false,
-          windowWidth: element.scrollWidth,
-          windowHeight: element.scrollHeight,
-          onclone: (clonedDoc) => {
-            const el = clonedDoc.getElementById('report-content');
-            if (el) el.style.display = 'block';
-          }
-        });
-      } catch (e) {
-        console.warn("html2canvas falhou no share, tentando toPng:", e);
-        const dataUrl = await toPng(element, {
-          quality: 0.7,
-          backgroundColor: '#ffffff',
-          pixelRatio: isMobile ? 1.0 : 1.5,
-          cacheBust: true,
-          skipFonts: false,
-        });
-        
-        if (!dataUrl || dataUrl === 'data:,') throw new Error("Falha ao capturar imagem.");
-        
-        canvas = await new Promise<HTMLCanvasElement>((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => {
-            const c = document.createElement('canvas');
-            c.width = img.width;
-            c.height = img.height;
-            c.getContext('2d')?.drawImage(img, 0, 0);
-            resolve(c);
-          };
-          img.onerror = reject;
-          img.src = dataUrl;
-        });
-      }
-
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'px',
-        format: [element.offsetWidth, element.offsetHeight]
-      });
-      
-      pdf.addImage(canvas, 'PNG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight(), undefined, 'FAST');
-      
-      const pdfBlob = pdf.output('blob');
-      const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
-      const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
-
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
         await navigator.share({
           title: 'Relatório PestScan Pro',
-          text: `Confira a identificação da praga: ${currentResult.pest.name}`,
+          text: `Confira a identificação da praga: ${currentResult?.pest?.name}`,
           files: [pdfFile]
         });
         showToast("Compartilhado com sucesso!", "success");
       } else {
-        const url = URL.createObjectURL(pdfBlob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        setTimeout(() => {
-          document.body.removeChild(link);
-          URL.revokeObjectURL(url);
-        }, 500);
-        showToast("Download iniciado (Compartilhamento não suportado)", "info");
+        // Se não suportar arquivos, abre o modal de sucesso para download alternativo
+        setGeneratedPdfBlob(blob);
+        setIsPdfModalOpen(true);
       }
     } catch (err: any) {
-      console.error("Erro ao compartilhar:", err);
-      showToast(`Erro ao gerar PDF: ${err.message || 'Tente novamente'}`, "error");
-    } finally {
-      setIsGeneratingPDF(false);
+      console.warn("navigator.share falhou (provavelmente falta de gesto do usuário):", err);
+      // Se falhar por causa do gesto do usuário (devido ao delay do PDF), abre o modal
+      // O modal terá um botão que o usuário clica -> gesto direto -> funciona!
+      setGeneratedPdfBlob(blob);
+      setIsPdfModalOpen(true);
     }
+  };
+
+  const PdfSuccessModal = () => {
+    if (!isPdfModalOpen || !generatedPdfBlob) return null;
+
+    const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
+
+    const downloadPdf = () => {
+      const url = URL.createObjectURL(generatedPdfBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 1000);
+      showToast("Download iniciado!", "success");
+      setIsPdfModalOpen(false);
+    };
+
+    const sharePdf = async () => {
+      const pdfFile = new File([generatedPdfBlob], fileName, { type: 'application/pdf' });
+      try {
+        if (navigator.share) {
+          await navigator.share({
+            title: 'Relatório PestScan Pro',
+            text: `Confira a identificação da praga: ${currentResult?.pest?.name}`,
+            files: [pdfFile]
+          });
+          showToast("Compartilhado com sucesso!", "success");
+          setIsPdfModalOpen(false);
+        }
+      } catch (err) {
+        console.error("Erro ao compartilhar do modal:", err);
+        downloadPdf(); // Fallback final
+      }
+    };
+
+    return (
+      <AnimatePresence>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/80 backdrop-blur-sm">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0, y: 20 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.9, opacity: 0, y: 20 }}
+            className="bg-white rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl"
+          >
+            <div className="p-8 text-center space-y-6">
+              <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                <FileText size={40} />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Relatório Pronto!</h3>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">O PDF foi gerado com sucesso.</p>
+              </div>
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={sharePdf}
+                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all shadow-lg shadow-emerald-200"
+                >
+                  <Share2 size={18} /> Compartilhar PDF
+                </button>
+                <button 
+                  onClick={downloadPdf}
+                  className="w-full py-4 bg-slate-100 text-slate-600 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all"
+                >
+                  <Printer size={18} /> Baixar PDF
+                </button>
+                <button 
+                  onClick={() => setIsPdfModalOpen(false)}
+                  className="w-full py-2 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] active:opacity-50 transition-all"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </AnimatePresence>
+    );
   };
 
   const savePestDetails = async () => {
@@ -1081,6 +1101,7 @@ const App: React.FC = () => {
   };
 
   const handleCapture = async () => {
+    setIsPdfModalOpen(false);
     if (view !== 'camera') { setView('camera'); return; }
     if (!videoRef.current) return;
     
@@ -2966,6 +2987,30 @@ const App: React.FC = () => {
           </div>
         )}
       </main>
+      
+      <PdfSuccessModal />
+      
+      {isGeneratingPDF && (
+        <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-md p-10 text-center">
+          <div className="relative w-32 h-32 mb-8">
+            <div className="absolute inset-0 border-8 border-emerald-500/20 rounded-full" />
+            <div className="absolute inset-0 border-8 border-t-emerald-500 rounded-full animate-spin" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <FileText size={40} className="text-emerald-500" />
+            </div>
+          </div>
+          <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-2">Gerando Relatório</h3>
+          <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest animate-pulse">Capturando dados e processando imagens...</p>
+          <div className="mt-12 max-w-xs w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
+            <motion.div 
+              initial={{ width: "0%" }}
+              animate={{ width: "100%" }}
+              transition={{ duration: 5, ease: "linear" }}
+              className="h-full bg-emerald-500"
+            />
+          </div>
+        </div>
+      )}
 
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-100 px-10 pt-5 pb-10 flex justify-between items-center z-50 rounded-t-[3.5rem] shadow-[0_-20px_50px_-15px_rgba(0,0,0,0.08)]">
         <button onClick={() => { setView('main'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all w-20 ${view === 'main' || view === 'detail' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
