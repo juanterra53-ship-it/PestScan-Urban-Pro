@@ -677,6 +677,12 @@ const App: React.FC = () => {
     
     setIsGeneratingPDF(true);
     const element = reportRef.current;
+    
+    // Detecta se é dispositivo móvel para otimizar memória
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    const captureWidth = isMobile ? 800 : 1024;
+    const captureScale = isMobile ? 1.5 : 2;
+
     const originalStyle = {
       width: element.style.width,
       maxWidth: element.style.maxWidth,
@@ -691,8 +697,8 @@ const App: React.FC = () => {
     };
 
     try {
-      // Força renderização de alta qualidade (largura fixa de desktop)
-      element.style.width = '1024px';
+      // Prepara o elemento para captura
+      element.style.width = `${captureWidth}px`;
       element.style.maxWidth = 'none';
       element.style.position = 'fixed';
       element.style.left = '0';
@@ -703,57 +709,65 @@ const App: React.FC = () => {
       element.style.opacity = '1';
       element.style.backgroundColor = '#ffffff';
       
-      // Aguarda renderização e carregamento de imagens (especialmente o mapa estático)
-      await new Promise(r => setTimeout(r, 2500));
+      // Aguarda renderização (mais tempo no mobile)
+      await new Promise(r => setTimeout(r, isMobile ? 3000 : 2500));
       
       let canvas;
       try {
-        // Tentativa 1: html2canvas (Geralmente mais estável para layouts complexos)
+        // No mobile, html2canvas costuma ser mais estável para evitar crashes de memória
+        if (isMobile) {
+          canvas = await html2canvas(element, {
+            useCORS: true,
+            allowTaint: true,
+            scale: captureScale,
+            backgroundColor: '#ffffff',
+            logging: false,
+            width: captureWidth,
+            onclone: (clonedDoc) => {
+              const el = clonedDoc.querySelector('[data-report-container]');
+              if (el) {
+                (el as HTMLElement).style.display = 'block';
+                (el as HTMLElement).style.visibility = 'visible';
+                (el as HTMLElement).style.opacity = '1';
+              }
+            }
+          });
+        } else {
+          // Desktop usa toPng para maior fidelidade
+          const dataUrl = await toPng(element, {
+            quality: 0.95,
+            backgroundColor: '#ffffff',
+            pixelRatio: captureScale,
+            cacheBust: true,
+            skipFonts: true,
+          });
+          
+          const img = new Image();
+          img.src = dataUrl;
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+          });
+          
+          canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0);
+          }
+        }
+      } catch (e) {
+        console.warn("Primeira tentativa de captura falhou, tentando fallback:", e);
+        // Fallback universal
         canvas = await html2canvas(element, {
           useCORS: true,
-          allowTaint: true,
-          scale: 2,
+          scale: 1.2,
           backgroundColor: '#ffffff',
-          logging: false,
-          width: 1024,
-          onclone: (clonedDoc) => {
-            const el = clonedDoc.querySelector('[data-report-container]');
-            if (el) {
-              (el as HTMLElement).style.display = 'block';
-              (el as HTMLElement).style.visibility = 'visible';
-              (el as HTMLElement).style.opacity = '1';
-            }
-          }
+          width: captureWidth
         });
-      } catch (e) {
-        console.warn("html2canvas falhou, tentando toPng:", e);
-        // Tentativa 2: toPng
-        const dataUrl = await toPng(element, {
-          quality: 0.95,
-          backgroundColor: '#ffffff',
-          pixelRatio: 2,
-          cacheBust: true,
-          skipFonts: true,
-        });
-        
-        const img = new Image();
-        img.src = dataUrl;
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-        });
-        
-        canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0);
-        } else {
-          throw new Error("Não foi possível obter o contexto do canvas.");
-        }
       }
 
       if (!canvas) throw new Error("Falha ao criar canvas do relatório.");
@@ -777,7 +791,7 @@ const App: React.FC = () => {
         format: [pageWidth, finalHeight]
       });
 
-      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, 'FAST');
+      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, 'FAST');
       
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
       const pdfBlob = dynamicPdf.output('blob');
@@ -850,62 +864,91 @@ const App: React.FC = () => {
       if (!generatedPdfBlob) return;
       
       try {
-        const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
-        
-        // Método 1: Blob URL (Padrão)
         const url = URL.createObjectURL(generatedPdfBlob);
+        
+        // Tentativa 1: Link invisível (Padrão)
         const link = document.createElement('a');
         link.href = url;
         link.download = fileName;
+        link.target = '_blank';
         document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
         
-        // Método 2: Fallback para Data URI (Melhor para Android WebView)
-        // Usamos um pequeno delay para não interferir com o primeiro se ele funcionar
-        setTimeout(() => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64data = reader.result as string;
-            const a = document.createElement('a');
-            a.href = base64data;
-            a.download = fileName;
-            a.click();
-            
-            // Se ainda assim não funcionar no Android, tentamos abrir em nova aba
-            setTimeout(() => {
-              window.open(base64data, '_blank');
-            }, 500);
-          };
-          reader.readAsDataURL(generatedPdfBlob);
-        }, 500);
+        // Tentativa 2: Fallback para Android WebView (Data URI)
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          // Tenta forçar o download mudando o mime-type
+          const downloadUrl = base64data.replace('application/pdf', 'application/octet-stream');
+          
+          // Cria um iframe invisível para forçar o download em alguns navegadores
+          const iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          iframe.src = downloadUrl;
+          document.body.appendChild(iframe);
+          
+          // Tenta abrir em nova aba como último recurso
+          setTimeout(() => {
+            window.location.href = downloadUrl;
+          }, 500);
+        };
+        reader.readAsDataURL(generatedPdfBlob);
         
         showToast("Download iniciado!", "success");
-        setIsPdfModalOpen(false);
       } catch (err) {
         console.error("Erro crítico no download:", err);
-        showToast("Erro ao baixar. Tente compartilhar.", "error");
+        showToast("Erro ao baixar.", "error");
       }
     };
 
     const sharePdf = async () => {
+      if (!generatedPdfBlob) return;
+      
       const pdfFile = new File([generatedPdfBlob], fileName, { type: 'application/pdf' });
+      
       try {
-        if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-          await navigator.share({
-            title: 'Relatório PestScan Pro',
-            text: `Confira a identificação da praga: ${currentResult?.pest?.name}`,
-            files: [pdfFile]
-          });
-          showToast("Compartilhado com sucesso!", "success");
-          setIsPdfModalOpen(false);
+        if (navigator.share) {
+          // Verifica se pode compartilhar arquivos
+          if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+            await navigator.share({
+              title: 'Relatório PestScan Pro',
+              text: `Relatório de identificação: ${currentResult?.pest?.name}`,
+              files: [pdfFile]
+            });
+            showToast("Compartilhado!", "success");
+            setIsPdfModalOpen(false);
+          } else {
+            // Fallback: Compartilha apenas o texto se não puder compartilhar arquivos
+            await navigator.share({
+              title: 'Relatório PestScan Pro',
+              text: `Relatório de identificação: ${currentResult?.pest?.name}. O arquivo PDF foi gerado com sucesso. Use a opção 'Baixar' se o compartilhamento direto falhou.`
+            });
+            showToast("Texto compartilhado. Use 'Baixar' para o arquivo.", "info");
+          }
         } else {
-          // Fallback se não puder compartilhar arquivos
+          showToast("Compartilhamento não disponível.", "error");
           downloadPdf();
         }
       } catch (err) {
-        console.error("Erro ao compartilhar do modal:", err);
-        downloadPdf(); // Fallback final
+        console.error("Erro ao compartilhar:", err);
+        downloadPdf();
       }
+    };
+
+    const viewPdf = () => {
+      if (!generatedPdfBlob) return;
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64data = reader.result as string;
+        const win = window.open();
+        if (win) {
+          win.document.write('<iframe src="' + base64data + '" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>');
+        } else {
+          window.location.href = base64data;
+        }
+      };
+      reader.readAsDataURL(generatedPdfBlob);
     };
 
     return (
@@ -928,23 +971,29 @@ const App: React.FC = () => {
               <div className="flex flex-col gap-3">
                 <button 
                   onClick={sharePdf}
-                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all shadow-lg shadow-emerald-200"
+                  className="w-full py-5 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all"
                 >
-                  <Share2 size={18} /> Compartilhar PDF
+                  <Share2 size={16} /> Compartilhar PDF
                 </button>
                 <button 
                   onClick={downloadPdf}
-                  className="w-full py-4 bg-slate-100 text-slate-600 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all"
+                  className="w-full py-5 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-3 active:scale-95 transition-all"
                 >
-                  <Printer size={18} /> Baixar PDF
+                  <Printer size={16} /> Baixar PDF
                 </button>
                 <button 
-                  onClick={() => setIsPdfModalOpen(false)}
-                  className="w-full py-2 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] active:opacity-50 transition-all"
+                  onClick={viewPdf}
+                  className="w-full py-4 bg-white border border-slate-200 text-slate-400 rounded-2xl text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all"
                 >
-                  Fechar
+                  <BookOpen size={14} /> Visualizar no Navegador
                 </button>
               </div>
+              <button 
+                onClick={() => setIsPdfModalOpen(false)}
+                className="text-[10px] font-black text-slate-300 uppercase tracking-widest hover:text-slate-400 transition-colors"
+              >
+                Fechar
+              </button>
             </div>
           </motion.div>
         </div>
@@ -3120,7 +3169,7 @@ const App: React.FC = () => {
       )}
 
       <div className="fixed bottom-3 right-6 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em] pointer-events-none z-[60] opacity-50">
-        v2.7.5 Stable
+        v2.7.6 Stable
       </div>
     </div>
   );
