@@ -244,7 +244,25 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [isAiSearching, setIsAiSearching] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('Analisando Estrutura Biológica');
+
+  useEffect(() => {
+    if (loading) {
+      const messages = [
+        'Analisando Estrutura Biológica',
+        'Mapeando Banco de Dados Global',
+        'Consultando Enciclopédia Urbana',
+        'Gerando Recomendações Técnicas',
+        'Verificando Nível de Risco'
+      ];
+      let i = 0;
+      const interval = setInterval(() => {
+        i = (i + 1) % messages.length;
+        setLoadingMessage(messages[i]);
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [loading]);
   const [location, setLocation] = useState<{lat: number, lon: number, address: string} | null>(null);
   
   // Report Fields
@@ -1244,8 +1262,14 @@ const App: React.FC = () => {
     if (!videoRef.current) return;
     
     const startTime = Date.now();
-    setLoading(true); setError(null);
+    setLoading(true); 
+    setLoadingMessage('Focando Câmera...');
+    setError(null);
+    
     try {
+      // Pequeno delay para garantir o foco da câmera
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
       // CAPTURA DE LOCALIZAÇÃO (EM PARALELO - NÃO BLOQUEIA O INÍCIO DA ANÁLISE)
       let locData = location ? { lat: location.lat, lon: location.lon, address: location.address } : { lat: 0, lon: 0, address: "Localização não disponível" };
       const locationPromise = (async () => {
@@ -1693,7 +1717,7 @@ const App: React.FC = () => {
             </button>
           )}
           
-          <p className="text-[8px] font-black uppercase tracking-[0.3em] text-white/20 mt-2">v2.7.5 Stable</p>
+          <p className="text-[8px] font-black uppercase tracking-[0.3em] text-white/20 mt-2">v2.8.1 Stable</p>
           
           <button 
             onClick={() => setView('privacy')}
@@ -2167,10 +2191,12 @@ const App: React.FC = () => {
                       console.log(`[Map] Renderizando ${points.length} marcadores de pragas`);
                       
                       return points.map(entry => {
-                        const isNew = (Date.now() - new Date(entry.timestamp).getTime()) < 300000; // 5 minutes
-                        const lat = entry.result.location!.latitude;
-                        const lon = entry.result.location!.longitude;
+                        const lat = entry.result?.location?.latitude || 0;
+                        const lon = entry.result?.location?.longitude || 0;
+                        const address = entry.location || "Localização Desconhecida";
                         
+                        if (!isValidCoord(lat) || !isValidCoord(lon)) return null;
+
                         return (
                           <React.Fragment key={entry.id}>
                             {/* Heatmap simulation with multiple circles */}
@@ -2202,45 +2228,29 @@ const App: React.FC = () => {
                               }}
                             />
                             
-                            {isNew && (
-                              <Circle 
-                                center={[lat, lon]}
-                                radius={50}
-                                pathOptions={{ 
-                                  fillColor: '#ef4444',
-                                  fillOpacity: 0.4,
-                                  color: '#ef4444',
-                                  weight: 1,
-                                  className: 'animate-pulse'
-                                }}
-                              />
-                            )}
-
                             <Marker
                               position={[lat, lon]}
                               icon={pestIcon || undefined}
                             >
                               <Popup>
-                                <div className="w-40 p-1">
+                                <div className="w-48 p-1">
                                   <img 
                                     src={entry.image || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
                                     className="w-full h-24 object-cover rounded-xl mb-2" 
                                     referrerPolicy="no-referrer"
-                                    onError={(e) => {
-                                      console.warn("[Map] Erro ao carregar imagem:", entry.image?.substring(0, 50));
-                                      (e.target as HTMLImageElement).src = 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem';
-                                    }}
                                   />
                                   <div className="flex items-center justify-between mb-1">
                                     <p className="font-black text-xs text-slate-900 uppercase leading-none">{entry.result.pest?.name || 'Scan'}</p>
-                                    {isNew && (
-                                      <span className="bg-red-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase">Novo</span>
-                                    )}
                                   </div>
-                                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">
-                                    {new Date(entry.timestamp).toLocaleDateString()} - {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                  </p>
-                                  <div className="flex items-center gap-2">
+                                  <div className="space-y-1 border-t border-slate-100 pt-2 mt-2">
+                                    <p className="text-[9px] text-slate-500 flex items-center gap-1 font-bold">
+                                      <MapPin size={10} className="text-emerald-500" /> {address}
+                                    </p>
+                                    <p className="text-[8px] font-mono text-slate-400 bg-slate-50 p-1 rounded">
+                                      LAT: {lat.toFixed(6)} | LON: {lon.toFixed(6)}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2 mt-2">
                                     <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                                       <div className="h-full bg-emerald-500" style={{ width: `${entry.result.confidence * 100}%` }} />
                                     </div>
@@ -2603,7 +2613,26 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-black text-slate-800 text-base uppercase tracking-tight">Não Identificado</h3>
-                  <p className="text-xs text-slate-400 font-bold mt-2 leading-relaxed">A imagem pode estar desfocada ou a espécie não consta no banco de dados.</p>
+                  <div className="mt-6 p-6 bg-slate-50 rounded-[2rem] border border-slate-100 text-center">
+                    <Search className="w-10 h-10 text-slate-200 mx-auto mb-4" />
+                    <p className="text-[11px] text-slate-500 font-bold leading-relaxed max-w-[220px] mx-auto">
+                      A imagem pode estar desfocada ou a espécie não consta no banco de dados.
+                    </p>
+                    <div className="mt-6 pt-6 border-t border-slate-200/50 space-y-3">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Dicas para Identificação:</p>
+                      <ul className="text-[10px] text-slate-400 font-bold space-y-2">
+                        <li className="flex items-center gap-2 justify-center">
+                          <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full" /> Aproxime mais a câmera da praga
+                        </li>
+                        <li className="flex items-center gap-2 justify-center">
+                          <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full" /> Garanta que haja luz suficiente
+                        </li>
+                        <li className="flex items-center gap-2 justify-center">
+                          <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full" /> Toque na tela para focar antes de capturar
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
                   
                   {currentResult.message && (
                     <div className="mt-8 p-6 bg-red-50 border border-red-100 rounded-[2rem] text-left">
@@ -3183,7 +3212,7 @@ const App: React.FC = () => {
           </div>
           <h2 className="text-2xl font-black mb-3 uppercase tracking-tighter">Acessando IA Urbana</h2>
           <p className="text-[10px] text-emerald-400/60 font-black uppercase tracking-[0.4em] max-w-[200px] leading-relaxed">
-            {isAiSearching ? 'Mapeando Banco de Dados Global' : 'Analisando Estrutura Biológica'}
+            {loadingMessage}
           </p>
           
           <button 
