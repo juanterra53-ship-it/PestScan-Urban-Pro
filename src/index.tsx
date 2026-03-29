@@ -669,7 +669,7 @@ const App: React.FC = () => {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const generatePDF = async (): Promise<{ blob: Blob, fileName: string } | null> => {
+  const generatePDF = async (): Promise<{ pdf: any, blob: Blob, fileName: string } | null> => {
     if (!currentResult || !currentResult.pest || !reportRef.current) {
       showToast("Relatório não pronto.", "error");
       return null;
@@ -796,7 +796,7 @@ const App: React.FC = () => {
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
       const pdfBlob = dynamicPdf.output('blob');
       
-      return { blob: pdfBlob, fileName };
+      return { pdf: dynamicPdf, blob: pdfBlob, fileName };
     } catch (e) {
       console.error("Erro crítico ao gerar PDF:", e);
       showToast("Erro ao processar o relatório. Tente novamente.", "error");
@@ -817,10 +817,19 @@ const App: React.FC = () => {
       return;
     }
 
-    const { blob } = result;
+    const { blob, pdf, fileName } = result as any;
     setGeneratedPdfBlob(blob);
     setIsPdfModalOpen(true);
     showToast("Relatório pronto!", "success");
+    
+    // Tenta o salvamento nativo do jsPDF imediatamente se possível
+    if (pdf && pdf.save) {
+      try {
+        pdf.save(fileName);
+      } catch (e) {
+        console.warn("pdf.save falhou:", e);
+      }
+    }
   };
 
   const handleShare = async () => {
@@ -850,6 +859,18 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.warn("navigator.share falhou:", err);
+      // Fallback para compartilhar apenas texto se o arquivo falhar
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: 'Relatório PestScan Pro',
+            text: `Identificação: ${currentResult?.pest?.name}. O PDF foi gerado. Use a opção 'Baixar' no app.`
+          });
+          showToast("Texto compartilhado. Use 'Baixar' para o PDF.", "info");
+        } catch (e) {
+          console.error("Share texto falhou:", e);
+        }
+      }
       setGeneratedPdfBlob(blob);
       setIsPdfModalOpen(true);
     }
@@ -864,37 +885,34 @@ const App: React.FC = () => {
       if (!generatedPdfBlob) return;
       
       try {
-        const url = URL.createObjectURL(generatedPdfBlob);
-        
-        // No Android, as vezes o clique no link não funciona em WebViews.
-        // Tentamos o método jsPDF.save() se tivéssemos a instância, mas temos o Blob.
-        // Vamos usar o método de link mas sem window.open que causa tela branca.
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName;
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        
-        // Pequeno atraso para garantir o clique antes de remover
-        setTimeout(() => {
-          document.body.removeChild(link);
-          URL.revokeObjectURL(url);
-        }, 100);
-        
-        // Fallback para Android WebView: Data URI via location.href
-        // Apenas se não for um arquivo gigante
-        if (generatedPdfBlob.size < 2000000) { // < 2MB
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64data = reader.result as string;
-            const downloadUrl = base64data.replace('application/pdf', 'application/octet-stream');
-            setTimeout(() => {
-              window.location.href = downloadUrl;
-            }, 1500);
-          };
-          reader.readAsDataURL(generatedPdfBlob);
-        }
+        // No Android, o método mais compatível é o link com base64
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          const link = document.createElement('a');
+          link.href = base64data;
+          link.download = fileName;
+          link.target = "_blank";
+          document.body.appendChild(link);
+          link.click();
+          
+          setTimeout(() => {
+            document.body.removeChild(link);
+          }, 200);
+          
+          // Fallback 2: URL.createObjectURL
+          const url = URL.createObjectURL(generatedPdfBlob);
+          const link2 = document.createElement('a');
+          link2.href = url;
+          link2.download = fileName;
+          document.body.appendChild(link2);
+          link2.click();
+          setTimeout(() => {
+            document.body.removeChild(link2);
+            URL.revokeObjectURL(url);
+          }, 200);
+        };
+        reader.readAsDataURL(generatedPdfBlob);
         
         showToast("Tentando baixar...", "success");
       } catch (err) {
@@ -3196,7 +3214,7 @@ const App: React.FC = () => {
       )}
 
       <div className="fixed bottom-3 right-6 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em] pointer-events-none z-[60] opacity-50">
-        v2.7.8 Stable
+        v2.7.9 Stable
       </div>
     </div>
   );
