@@ -680,8 +680,8 @@ const App: React.FC = () => {
     
     // Detecta se é dispositivo móvel para otimizar memória
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    const captureWidth = isMobile ? 800 : 1024;
-    const captureScale = isMobile ? 1.5 : 2;
+    const captureWidth = isMobile ? 750 : 1024; // Reduzido para mobile
+    const captureScale = isMobile ? 1.2 : 2; // Reduzido para mobile
 
     const originalStyle = {
       width: element.style.width,
@@ -693,13 +693,16 @@ const App: React.FC = () => {
       visibility: element.style.visibility,
       display: element.style.display,
       opacity: element.style.opacity,
-      backgroundColor: element.style.backgroundColor
+      backgroundColor: element.style.backgroundColor,
+      overflow: element.style.overflow,
+      height: element.style.height
     };
 
     try {
       // Prepara o elemento para captura
       element.style.width = `${captureWidth}px`;
       element.style.maxWidth = 'none';
+      element.style.height = 'auto';
       element.style.position = 'fixed';
       element.style.left = '0';
       element.style.top = '0';
@@ -708,65 +711,60 @@ const App: React.FC = () => {
       element.style.display = 'block';
       element.style.opacity = '1';
       element.style.backgroundColor = '#ffffff';
+      element.style.overflow = 'visible';
       
       // Aguarda renderização (mais tempo no mobile)
-      await new Promise(r => setTimeout(r, isMobile ? 3000 : 2500));
+      await new Promise(r => setTimeout(r, isMobile ? 4000 : 2500));
       
       let canvas;
       try {
-        // No mobile, html2canvas costuma ser mais estável para evitar crashes de memória
-        if (isMobile) {
-          canvas = await html2canvas(element, {
-            useCORS: true,
-            allowTaint: true,
-            scale: captureScale,
-            backgroundColor: '#ffffff',
-            logging: false,
-            width: captureWidth,
-            onclone: (clonedDoc) => {
-              const el = clonedDoc.querySelector('[data-report-container]');
-              if (el) {
-                (el as HTMLElement).style.display = 'block';
-                (el as HTMLElement).style.visibility = 'visible';
-                (el as HTMLElement).style.opacity = '1';
-              }
-            }
-          });
-        } else {
-          // Desktop usa toPng para maior fidelidade
-          const dataUrl = await toPng(element, {
-            quality: 0.95,
-            backgroundColor: '#ffffff',
-            pixelRatio: captureScale,
-            cacheBust: true,
-            skipFonts: true,
-          });
-          
-          const img = new Image();
-          img.src = dataUrl;
-          await new Promise((resolve, reject) => {
-            img.onload = resolve;
-            img.onerror = reject;
-          });
-          
-          canvas = document.createElement('canvas');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(img, 0, 0);
-          }
+        // Tenta toPng primeiro (mais leve no mobile se configurado corretamente)
+        const dataUrl = await toPng(element, {
+          quality: 0.8,
+          backgroundColor: '#ffffff',
+          pixelRatio: captureScale,
+          cacheBust: false, // Desativado para evitar problemas de CORS
+          skipFonts: true,
+        });
+        
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.src = dataUrl;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          setTimeout(reject, 10000); // Timeout de 10s
+        });
+        
+        canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
         }
       } catch (e) {
-        console.warn("Primeira tentativa de captura falhou, tentando fallback:", e);
-        // Fallback universal
+        console.warn("toPng falhou, tentando html2canvas:", e);
+        // Fallback para html2canvas
         canvas = await html2canvas(element, {
           useCORS: true,
-          scale: 1.2,
+          allowTaint: true,
+          scale: captureScale,
           backgroundColor: '#ffffff',
-          width: captureWidth
+          logging: false,
+          width: captureWidth,
+          height: element.offsetHeight,
+          onclone: (clonedDoc) => {
+            const el = clonedDoc.querySelector('[data-report-container]');
+            if (el) {
+              (el as HTMLElement).style.display = 'block';
+              (el as HTMLElement).style.visibility = 'visible';
+              (el as HTMLElement).style.opacity = '1';
+              (el as HTMLElement).style.width = `${captureWidth}px`;
+            }
+          }
         });
       }
 
@@ -791,7 +789,9 @@ const App: React.FC = () => {
         format: [pageWidth, finalHeight]
       });
 
-      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, 'FAST');
+      // Reduz qualidade no mobile para evitar crash de memória no addImage
+      const imgQuality = isMobile ? 0.7 : 0.85;
+      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', imgQuality), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, 'FAST');
       
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
       const pdfBlob = dynamicPdf.output('blob');
@@ -866,32 +866,27 @@ const App: React.FC = () => {
       try {
         const url = URL.createObjectURL(generatedPdfBlob);
         
-        // Tentativa 1: Link invisível (Padrão)
+        // No Android, abrir em nova aba costuma ser mais confiável para Blobs
+        const win = window.open(url, '_blank');
+        
+        // Fallback: Link invisível
         const link = document.createElement('a');
         link.href = url;
         link.download = fileName;
-        link.target = '_blank';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         
-        // Tentativa 2: Fallback para Android WebView (Data URI)
+        // Fallback 2: Data URI (Melhor para Android WebView)
         const reader = new FileReader();
         reader.onloadend = () => {
           const base64data = reader.result as string;
-          // Tenta forçar o download mudando o mime-type
           const downloadUrl = base64data.replace('application/pdf', 'application/octet-stream');
           
-          // Cria um iframe invisível para forçar o download em alguns navegadores
-          const iframe = document.createElement('iframe');
-          iframe.style.display = 'none';
-          iframe.src = downloadUrl;
-          document.body.appendChild(iframe);
-          
-          // Tenta abrir em nova aba como último recurso
+          // Tenta forçar o download via location
           setTimeout(() => {
             window.location.href = downloadUrl;
-          }, 500);
+          }, 1000);
         };
         reader.readAsDataURL(generatedPdfBlob);
         
@@ -3169,7 +3164,7 @@ const App: React.FC = () => {
       )}
 
       <div className="fixed bottom-3 right-6 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em] pointer-events-none z-[60] opacity-50">
-        v2.7.6 Stable
+        v2.7.7 Stable
       </div>
     </div>
   );
