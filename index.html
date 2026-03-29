@@ -11,24 +11,181 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="msapplication-navbutton-color" content="#022c22">
     <meta name="apple-mobile-web-app-status-bar-style" content="#022c22">
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js" crossorigin="anonymous"></script>
     <script>
-        window.addEventListener('load', () => {
-            if (typeof tf === 'undefined' || typeof tflite === 'undefined') {
-                console.error('Falha ao carregar bibliotecas do TensorFlow.js via CDN.');
-                const overlay = document.getElementById('error-overlay');
-                if (overlay && !navigator.onLine) {
-                    overlay.innerHTML = '<div style="position:fixed;top:0;left:0;width:100%;background:#ef4444;color:white;padding:10px;text-align:center;z-index:9999;font-size:12px;">Modo Offline: Bibliotecas de IA não encontradas no cache. Conecte-se à internet uma vez para sincronizar.</div>';
+        // Sistema de carregamento resiliente para TensorFlow.js
+        function loadScript(url) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = url;
+                script.async = true;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        }
+
+        async function initTF() {
+            console.log('🚀 [v2.7.5] Iniciando carregamento de bibliotecas TF...');
+            const tfUrls = [
+                'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js',
+                'https://unpkg.com/@tensorflow/tfjs@4.17.0/dist/tf.min.js',
+                'https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.17.0/tf.min.js'
+            ];
+            
+            const tfliteUrls = [
+                'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js',
+                'https://unpkg.com/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js'
+            ];
+            
+            let tfLoaded = false;
+            for (const url of tfUrls) {
+                try {
+                    console.log(' tentando carregar TFJS de:', url);
+                    await loadScript(url);
+                    tfLoaded = true;
+                    console.log('✅ TFJS carregado com sucesso!');
+                    break;
+                } catch (e) {
+                    console.warn('❌ Falha ao carregar TFJS de:', url);
                 }
             }
+
+            if (!tfLoaded) {
+                console.error('🚨 Todas as tentativas de carregar TFJS falharam.');
+                const overlay = document.getElementById('error-overlay');
+                if (overlay) overlay.innerHTML = '<div style="color:red; padding:20px; background:white; position:fixed; top:0; z-index:9999;">Erro Crítico: Não foi possível carregar o motor de IA (TFJS). Verifique sua conexão.</div>';
+            }
+
+            let tfliteLoaded = false;
+            for (const url of tfliteUrls) {
+                try {
+                    console.log(' tentando carregar TFLite de:', url);
+                    await loadScript(url);
+                    tfliteLoaded = true;
+                    console.log('✅ TFLite carregado com sucesso!');
+                    break;
+                } catch (e) {
+                    console.warn('❌ Falha ao carregar TFLite de:', url);
+                }
+            }
+
+            if (!tfliteLoaded) {
+                console.error('🚨 Todas as tentativas de carregar TFLite falharam.');
+            }
+        }
+
+        initTF();
+
+        window.addEventListener('load', () => {
+            console.log('PestScan Pro carregado.');
         });
     </script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" crossorigin="anonymous">
+    <style>
+        body { margin: 0; padding: 0; background-color: #022c22; }
+        #splash-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #022c22;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            transition: opacity 0.5s ease-out;
+        }
+        .splash-logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            border-radius: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            margin-bottom: 24px;
+            animation: pulse 2s infinite ease-in-out;
+        }
+        .splash-text {
+            color: white;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-weight: 800;
+            font-size: 24px;
+            letter-spacing: -0.02em;
+            text-transform: uppercase;
+        }
+        .splash-sub {
+            color: #10b981;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-weight: 700;
+            font-size: 10px;
+            letter-spacing: 0.3em;
+            text-transform: uppercase;
+            margin-top: 8px;
+            opacity: 0.8;
+        }
+        .loader {
+            width: 40px;
+            height: 4px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 2px;
+            margin-top: 40px;
+            overflow: hidden;
+            position: relative;
+        }
+        .loader::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 40%;
+            height: 100%;
+            background: #10b981;
+            animation: loading 1.5s infinite ease-in-out;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        @keyframes loading {
+            0% { left: -40%; }
+            100% { left: 100%; }
+        }
+    </style>
 </head>
 <body>
+    <div id="splash-screen">
+        <div class="splash-logo">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+        </div>
+        <div class="splash-text">PestScan Pro</div>
+        <div class="splash-sub">IA Urbana v2.8.1</div>
+        <div class="loader"></div>
+    </div>
     <div id="error-overlay"></div>
     <div id="root"></div>
     <script type="module" src="/src/index.tsx"></script>
+    <script>
+        // Remove o splash screen quando o React montar
+        const observer = new MutationObserver((mutations) => {
+            const root = document.getElementById('root');
+            if (root && root.children.length > 0) {
+                const splash = document.getElementById('splash-screen');
+                if (splash) {
+                    splash.style.opacity = '0';
+                    setTimeout(() => splash.remove(), 500);
+                }
+                observer.disconnect();
+            }
+        });
+        observer.observe(document.getElementById('root'), { childList: true });
+    </script>
 </body>
 </html>
