@@ -5,7 +5,7 @@ import {
   ChevronRight, ArrowLeft, Loader2, 
   ShieldAlert, Volume2, Sparkles, 
   AlertTriangle, X, Search, Info, Key,
-  Trash2, Clock, Hammer, FlaskConical,
+  Trash2, Clock, Hammer, FlaskConical, Eye,
   User, Lock, Mail, LogOut, CheckCircle,
   Database, ShieldCheck, Zap, ZapOff,
   Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw, Printer, Save, FileText,
@@ -381,7 +381,21 @@ const App: React.FC = () => {
   
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [generatedPdfBlob, setGeneratedPdfBlob] = useState<Blob | null>(null);
+  const [generatedPdfFileName, setGeneratedPdfFileName] = useState<string>("");
+  const [pdfBase64, setPdfBase64] = useState<string | null>(null);
   const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
+  
+  useEffect(() => {
+    if (generatedPdfBlob) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPdfBase64(reader.result as string);
+      };
+      reader.readAsDataURL(generatedPdfBlob);
+    } else {
+      setPdfBase64(null);
+    }
+  }, [generatedPdfBlob]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -819,6 +833,7 @@ const App: React.FC = () => {
 
     const { blob, pdf, fileName } = result as any;
     setGeneratedPdfBlob(blob);
+    setGeneratedPdfFileName(fileName);
     setIsPdfModalOpen(true);
     showToast("Relatório pronto!", "success");
     
@@ -841,6 +856,8 @@ const App: React.FC = () => {
     }
 
     const { blob, fileName } = result;
+    setGeneratedPdfBlob(blob);
+    setGeneratedPdfFileName(fileName);
     const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
 
     // Tenta compartilhar diretamente primeiro
@@ -879,113 +896,74 @@ const App: React.FC = () => {
   const PdfSuccessModal = () => {
     if (!isPdfModalOpen || !generatedPdfBlob) return null;
 
-    const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
-
-    const downloadPdf = () => {
-      if (!generatedPdfBlob) return;
+    const downloadPdf = (e: React.MouseEvent) => {
+      if (!pdfBase64) return;
+      showToast("Iniciando download...", "success");
       
-      try {
-        // No Android, o método mais compatível é o link com base64
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64data = reader.result as string;
-          const link = document.createElement('a');
-          link.href = base64data;
-          link.download = fileName;
-          link.target = "_blank";
-          document.body.appendChild(link);
-          link.click();
-          
-          setTimeout(() => {
-            document.body.removeChild(link);
-          }, 200);
-          
-          // Fallback 2: URL.createObjectURL
-          const url = URL.createObjectURL(generatedPdfBlob);
-          const link2 = document.createElement('a');
-          link2.href = url;
-          link2.download = fileName;
-          document.body.appendChild(link2);
-          link2.click();
-          setTimeout(() => {
-            document.body.removeChild(link2);
-            URL.revokeObjectURL(url);
-          }, 200);
-        };
-        reader.readAsDataURL(generatedPdfBlob);
-        
-        showToast("Tentando baixar...", "success");
-      } catch (err) {
-        console.error("Erro crítico no download:", err);
-        showToast("Erro ao baixar.", "error");
+      // No Android WebView, às vezes o link <a> não dispara o DownloadListener
+      // Forçamos a navegação para o Data URI para garantir que o WebView intercepte
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      if (isMobile) {
+        e.preventDefault();
+        window.location.href = pdfBase64;
       }
     };
 
     const sharePdf = async () => {
-      if (!generatedPdfBlob) return;
-      
-      const pdfFile = new File([generatedPdfBlob], fileName, { type: 'application/pdf' });
+      if (!generatedPdfBlob || !pdfBase64) return;
       
       try {
+        const pdfFile = new File([generatedPdfBlob], generatedPdfFileName, { type: 'application/pdf' });
+        
         if (navigator.share) {
           // Tenta compartilhar o arquivo diretamente
           try {
             if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
               await navigator.share({
                 title: 'Relatório PestScan Pro',
-                text: `Relatório de identificação: ${currentResult?.pest?.name}`,
+                text: `Identificação: ${currentResult?.pest?.name}`,
                 files: [pdfFile]
               });
               showToast("Compartilhado!", "success");
-              setIsPdfModalOpen(false);
               return;
             }
           } catch (e) {
             console.warn("Falha ao compartilhar arquivo:", e);
           }
 
-          // Fallback: Compartilha apenas o texto se não puder compartilhar arquivos
+          // Fallback: Compartilha apenas o texto
           await navigator.share({
             title: 'Relatório PestScan Pro',
-            text: `Relatório de identificação: ${currentResult?.pest?.name}. O arquivo PDF foi gerado com sucesso. Use a opção 'Baixar' se o compartilhamento direto falhou.`
+            text: `Identificação: ${currentResult?.pest?.name}. O PDF foi gerado. Use a opção 'Baixar' no app.`
           });
-          showToast("Texto compartilhado. Use 'Baixar' para o arquivo.", "info");
+          showToast("Texto compartilhado.", "info");
         } else {
           showToast("Compartilhamento não disponível.", "error");
-          downloadPdf();
         }
       } catch (err) {
         console.error("Erro ao compartilhar:", err);
-        downloadPdf();
       }
     };
 
     const viewPdf = () => {
-      if (!generatedPdfBlob) return;
-      const url = URL.createObjectURL(generatedPdfBlob);
-      // No Android, abrir o Blob diretamente em uma nova aba é o mais seguro
-      // Se falhar, tentamos o base64
-      const win = window.open(url, '_blank');
-      if (!win) {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64data = reader.result as string;
-          window.location.href = base64data;
-        };
-        reader.readAsDataURL(generatedPdfBlob);
+      if (!pdfBase64) return;
+      const win = window.open();
+      if (win) {
+        win.document.write(`<iframe src="${pdfBase64}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
+      } else {
+        window.location.href = pdfBase64;
       }
     };
 
     const printPdf = () => {
-      if (!generatedPdfBlob) return;
-      const url = URL.createObjectURL(generatedPdfBlob);
-      const win = window.open(url, '_blank');
+      if (!pdfBase64) return;
+      const win = window.open();
       if (win) {
-        win.onload = () => {
+        win.document.write(`<iframe src="${pdfBase64}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
+        setTimeout(() => {
           win.print();
-        };
+        }, 1000);
       } else {
-        // Fallback: Tenta imprimir a página atual do relatório (que está visível por baixo)
         window.print();
       }
     };
@@ -1014,24 +992,28 @@ const App: React.FC = () => {
                 >
                   <Share2 size={16} /> Compartilhar PDF
                 </button>
-                <button 
+                <a 
+                  href={pdfBase64 || '#'}
+                  download={generatedPdfFileName}
                   onClick={downloadPdf}
-                  className="w-full py-5 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-3 active:scale-95 transition-all"
+                  className="w-full py-5 bg-slate-800 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-3 active:scale-95 transition-all shadow-lg shadow-slate-800/20"
                 >
                   <Printer size={16} /> Baixar PDF
-                </button>
-                <button 
-                  onClick={viewPdf}
-                  className="w-full py-4 bg-white border border-slate-200 text-slate-400 rounded-2xl text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all"
-                >
-                  <BookOpen size={14} /> Visualizar no Navegador
-                </button>
-                <button 
-                  onClick={printPdf}
-                  className="w-full py-4 bg-slate-50 border border-slate-100 text-slate-400 rounded-2xl text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all"
-                >
-                  <Printer size={14} /> Imprimir / Salvar PDF
-                </button>
+                </a>
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={viewPdf}
+                    className="py-4 bg-slate-50 text-slate-500 rounded-2xl text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
+                  >
+                    <Eye size={14} /> Visualizar
+                  </button>
+                  <button 
+                    onClick={printPdf}
+                    className="py-4 bg-slate-50 text-slate-500 rounded-2xl text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
+                  >
+                    <Printer size={14} /> Imprimir
+                  </button>
+                </div>
               </div>
               <button 
                 onClick={() => setIsPdfModalOpen(false)}
@@ -3214,7 +3196,7 @@ const App: React.FC = () => {
       )}
 
       <div className="fixed bottom-3 right-6 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em] pointer-events-none z-[60] opacity-50">
-        v2.7.9 Stable
+        v2.8.1 Stable
       </div>
     </div>
   );
