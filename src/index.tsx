@@ -9,7 +9,7 @@ import {
   User, Lock, Mail, LogOut, CheckCircle,
   Database, ShieldCheck, Zap, ZapOff,
   Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw, Printer, Save, FileText,
-  ChevronDown, ChevronUp, Activity, AlertCircle, Share2, Map as MapIcon
+  ChevronDown, ChevronUp, Activity, AlertCircle, Share2, Map as MapIcon, MapPin
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, CircleMarker, useMap, FeatureGroup, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
@@ -503,7 +503,7 @@ const App: React.FC = () => {
         console.log("🚀 [App] Iniciando inicialização...");
         loadLocalModel().catch(e => console.warn("Modelo offline:", e));
         
-        const splashPromise = new Promise(r => setTimeout(r, 2000));
+        const splashPromise = new Promise(r => setTimeout(r, 800));
         
         // Timeout de 5 segundos para o Supabase para evitar travamentos
         const sessionPromise = Promise.race([
@@ -1637,7 +1637,7 @@ const App: React.FC = () => {
   const handleAiDeepSearch = async () => {
     if (!searchTerm.trim()) return;
     const startTime = Date.now();
-    setLoading(true); setIsAiSearching(true); setError(null);
+    setLoading(true); setError(null);
     try {
       // 1. Tenta buscar no banco primeiro (Economia de API)
       const { data: existingData } = await supabase
@@ -1668,7 +1668,7 @@ const App: React.FC = () => {
       const elapsed = Date.now() - startTime;
       const minTime = 800;
       if (elapsed < minTime) await new Promise(r => setTimeout(r, minTime - elapsed));
-      setLoading(false); setIsAiSearching(false);
+      setLoading(false);
     }
   };
 
