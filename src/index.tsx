@@ -866,31 +866,37 @@ const App: React.FC = () => {
       try {
         const url = URL.createObjectURL(generatedPdfBlob);
         
-        // No Android, abrir em nova aba costuma ser mais confiável para Blobs
-        const win = window.open(url, '_blank');
-        
-        // Fallback: Link invisível
+        // No Android, as vezes o clique no link não funciona em WebViews.
+        // Tentamos o método jsPDF.save() se tivéssemos a instância, mas temos o Blob.
+        // Vamos usar o método de link mas sem window.open que causa tela branca.
         const link = document.createElement('a');
         link.href = url;
         link.download = fileName;
+        link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
         
-        // Fallback 2: Data URI (Melhor para Android WebView)
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64data = reader.result as string;
-          const downloadUrl = base64data.replace('application/pdf', 'application/octet-stream');
-          
-          // Tenta forçar o download via location
-          setTimeout(() => {
-            window.location.href = downloadUrl;
-          }, 1000);
-        };
-        reader.readAsDataURL(generatedPdfBlob);
+        // Pequeno atraso para garantir o clique antes de remover
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, 100);
         
-        showToast("Download iniciado!", "success");
+        // Fallback para Android WebView: Data URI via location.href
+        // Apenas se não for um arquivo gigante
+        if (generatedPdfBlob.size < 2000000) { // < 2MB
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const base64data = reader.result as string;
+            const downloadUrl = base64data.replace('application/pdf', 'application/octet-stream');
+            setTimeout(() => {
+              window.location.href = downloadUrl;
+            }, 1500);
+          };
+          reader.readAsDataURL(generatedPdfBlob);
+        }
+        
+        showToast("Tentando baixar...", "success");
       } catch (err) {
         console.error("Erro crítico no download:", err);
         showToast("Erro ao baixar.", "error");
@@ -904,23 +910,28 @@ const App: React.FC = () => {
       
       try {
         if (navigator.share) {
-          // Verifica se pode compartilhar arquivos
-          if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-            await navigator.share({
-              title: 'Relatório PestScan Pro',
-              text: `Relatório de identificação: ${currentResult?.pest?.name}`,
-              files: [pdfFile]
-            });
-            showToast("Compartilhado!", "success");
-            setIsPdfModalOpen(false);
-          } else {
-            // Fallback: Compartilha apenas o texto se não puder compartilhar arquivos
-            await navigator.share({
-              title: 'Relatório PestScan Pro',
-              text: `Relatório de identificação: ${currentResult?.pest?.name}. O arquivo PDF foi gerado com sucesso. Use a opção 'Baixar' se o compartilhamento direto falhou.`
-            });
-            showToast("Texto compartilhado. Use 'Baixar' para o arquivo.", "info");
+          // Tenta compartilhar o arquivo diretamente
+          try {
+            if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+              await navigator.share({
+                title: 'Relatório PestScan Pro',
+                text: `Relatório de identificação: ${currentResult?.pest?.name}`,
+                files: [pdfFile]
+              });
+              showToast("Compartilhado!", "success");
+              setIsPdfModalOpen(false);
+              return;
+            }
+          } catch (e) {
+            console.warn("Falha ao compartilhar arquivo:", e);
           }
+
+          // Fallback: Compartilha apenas o texto se não puder compartilhar arquivos
+          await navigator.share({
+            title: 'Relatório PestScan Pro',
+            text: `Relatório de identificação: ${currentResult?.pest?.name}. O arquivo PDF foi gerado com sucesso. Use a opção 'Baixar' se o compartilhamento direto falhou.`
+          });
+          showToast("Texto compartilhado. Use 'Baixar' para o arquivo.", "info");
         } else {
           showToast("Compartilhamento não disponível.", "error");
           downloadPdf();
@@ -933,17 +944,32 @@ const App: React.FC = () => {
 
     const viewPdf = () => {
       if (!generatedPdfBlob) return;
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64data = reader.result as string;
-        const win = window.open();
-        if (win) {
-          win.document.write('<iframe src="' + base64data + '" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>');
-        } else {
+      const url = URL.createObjectURL(generatedPdfBlob);
+      // No Android, abrir o Blob diretamente em uma nova aba é o mais seguro
+      // Se falhar, tentamos o base64
+      const win = window.open(url, '_blank');
+      if (!win) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
           window.location.href = base64data;
-        }
-      };
-      reader.readAsDataURL(generatedPdfBlob);
+        };
+        reader.readAsDataURL(generatedPdfBlob);
+      }
+    };
+
+    const printPdf = () => {
+      if (!generatedPdfBlob) return;
+      const url = URL.createObjectURL(generatedPdfBlob);
+      const win = window.open(url, '_blank');
+      if (win) {
+        win.onload = () => {
+          win.print();
+        };
+      } else {
+        // Fallback: Tenta imprimir a página atual do relatório (que está visível por baixo)
+        window.print();
+      }
     };
 
     return (
@@ -981,6 +1007,12 @@ const App: React.FC = () => {
                   className="w-full py-4 bg-white border border-slate-200 text-slate-400 rounded-2xl text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all"
                 >
                   <BookOpen size={14} /> Visualizar no Navegador
+                </button>
+                <button 
+                  onClick={printPdf}
+                  className="w-full py-4 bg-slate-50 border border-slate-100 text-slate-400 rounded-2xl text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all"
+                >
+                  <Printer size={14} /> Imprimir / Salvar PDF
                 </button>
               </div>
               <button 
@@ -3164,7 +3196,7 @@ const App: React.FC = () => {
       )}
 
       <div className="fixed bottom-3 right-6 text-[9px] font-black text-slate-300 uppercase tracking-[0.3em] pointer-events-none z-[60] opacity-50">
-        v2.7.7 Stable
+        v2.7.8 Stable
       </div>
     </div>
   );
