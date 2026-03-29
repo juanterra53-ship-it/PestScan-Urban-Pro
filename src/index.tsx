@@ -676,19 +676,21 @@ const App: React.FC = () => {
     }
     
     setIsGeneratingPDF(true);
+    const element = reportRef.current;
     const originalStyle = {
-      width: reportRef.current.style.width,
-      maxWidth: reportRef.current.style.maxWidth,
-      position: reportRef.current.style.position,
-      left: reportRef.current.style.left,
-      top: reportRef.current.style.top,
-      zIndex: reportRef.current.style.zIndex,
-      backgroundColor: reportRef.current.style.backgroundColor
+      width: element.style.width,
+      maxWidth: element.style.maxWidth,
+      position: element.style.position,
+      left: element.style.left,
+      top: element.style.top,
+      zIndex: element.style.zIndex,
+      visibility: element.style.visibility,
+      display: element.style.display,
+      opacity: element.style.opacity,
+      backgroundColor: element.style.backgroundColor
     };
 
     try {
-      const element = reportRef.current;
-      
       // Força renderização de alta qualidade (largura fixa de desktop)
       element.style.width = '1024px';
       element.style.maxWidth = 'none';
@@ -702,17 +704,36 @@ const App: React.FC = () => {
       element.style.backgroundColor = '#ffffff';
       
       // Aguarda renderização e carregamento de imagens (especialmente o mapa estático)
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 2500));
       
       let canvas;
       try {
-        // Tenta toPng primeiro, pois é mais confiável para mapas e CSS complexo
+        // Tentativa 1: html2canvas (Geralmente mais estável para layouts complexos)
+        canvas = await html2canvas(element, {
+          useCORS: true,
+          allowTaint: true,
+          scale: 2,
+          backgroundColor: '#ffffff',
+          logging: false,
+          width: 1024,
+          onclone: (clonedDoc) => {
+            const el = clonedDoc.querySelector('[data-report-container]');
+            if (el) {
+              (el as HTMLElement).style.display = 'block';
+              (el as HTMLElement).style.visibility = 'visible';
+              (el as HTMLElement).style.opacity = '1';
+            }
+          }
+        });
+      } catch (e) {
+        console.warn("html2canvas falhou, tentando toPng:", e);
+        // Tentativa 2: toPng
         const dataUrl = await toPng(element, {
-          quality: 1,
+          quality: 0.95,
           backgroundColor: '#ffffff',
           pixelRatio: 2,
           cacheBust: true,
-          skipFonts: true, // Melhora performance e evita erros de CORS em fontes
+          skipFonts: true,
         });
         
         const img = new Image();
@@ -730,26 +751,12 @@ const App: React.FC = () => {
           ctx.fillStyle = '#ffffff';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(img, 0, 0);
+        } else {
+          throw new Error("Não foi possível obter o contexto do canvas.");
         }
-      } catch (e) {
-        console.warn("toPng falhou, tentando html2canvas:", e);
-        canvas = await html2canvas(element, {
-          useCORS: true,
-          allowTaint: true,
-          scale: 2,
-          backgroundColor: '#ffffff',
-          logging: false,
-          width: 1024,
-          onclone: (clonedDoc) => {
-            const el = clonedDoc.querySelector('[data-report-container]');
-            if (el) {
-              (el as HTMLElement).style.display = 'block';
-              (el as HTMLElement).style.visibility = 'visible';
-              (el as HTMLElement).style.opacity = '1';
-            }
-          }
-        });
       }
+
+      if (!canvas) throw new Error("Falha ao criar canvas do relatório.");
 
       const pdf = new jsPDF({
         orientation: 'portrait',
@@ -758,33 +765,27 @@ const App: React.FC = () => {
       });
 
       const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
       const imgWidth = canvas.width;
       const imgHeight = canvas.height;
       
-      // Calcula a escala para caber na largura da página A4
       const ratio = pageWidth / imgWidth;
-      const finalWidth = pageWidth;
       const finalHeight = imgHeight * ratio;
 
-      // Se o relatório for maior que uma página, ele será comprimido em uma página A4 longa
-      // ou podemos criar múltiplas páginas. Para relatórios técnicos, uma página longa é comum em apps.
-      // Mas para jsPDF 'a4' é fixo. Vamos ajustar o formato para ser dinâmico mas com largura de A4.
       const dynamicPdf = new jsPDF({
         orientation: 'portrait',
         unit: 'px',
         format: [pageWidth, finalHeight]
       });
 
-      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, 'FAST');
+      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, 'FAST');
       
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
       const pdfBlob = dynamicPdf.output('blob');
       
       return { blob: pdfBlob, fileName };
     } catch (e) {
-      console.error("Erro ao gerar PDF:", e);
-      showToast("Falha ao gerar PDF profissional.", "error");
+      console.error("Erro crítico ao gerar PDF:", e);
+      showToast("Erro ao processar o relatório. Tente novamente.", "error");
       return null;
     } finally {
       if (reportRef.current) {
@@ -795,28 +796,26 @@ const App: React.FC = () => {
   };
 
   const handleDownloadOnly = async () => {
+    showToast("Iniciando geração do PDF...", "info");
     const result = await generatePDF();
-    if (!result) return;
+    if (!result) {
+      showToast("Erro ao gerar PDF. Tente novamente.", "error");
+      return;
+    }
 
-    const { blob, fileName } = result;
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    
-    setTimeout(() => {
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    }, 1000);
-
-    showToast("Download concluído!", "success");
+    const { blob } = result;
+    setGeneratedPdfBlob(blob);
+    setIsPdfModalOpen(true);
+    showToast("Relatório pronto!", "success");
   };
 
   const handleShare = async () => {
+    showToast("Preparando para compartilhar...", "info");
     const result = await generatePDF();
-    if (!result) return;
+    if (!result) {
+      showToast("Erro ao gerar PDF.", "error");
+      return;
+    }
 
     const { blob, fileName } = result;
     const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
@@ -836,9 +835,7 @@ const App: React.FC = () => {
         setIsPdfModalOpen(true);
       }
     } catch (err: any) {
-      console.warn("navigator.share falhou (provavelmente falta de gesto do usuário):", err);
-      // Se falhar por causa do gesto do usuário (devido ao delay do PDF), abre o modal
-      // O modal terá um botão que o usuário clica -> gesto direto -> funciona!
+      console.warn("navigator.share falhou:", err);
       setGeneratedPdfBlob(blob);
       setIsPdfModalOpen(true);
     }
@@ -850,7 +847,11 @@ const App: React.FC = () => {
     const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
 
     const downloadPdf = () => {
+      if (!generatedPdfBlob) return;
+      
       try {
+        const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
+        
         // Método 1: Blob URL (Padrão)
         const url = URL.createObjectURL(generatedPdfBlob);
         const link = document.createElement('a');
@@ -859,16 +860,24 @@ const App: React.FC = () => {
         document.body.appendChild(link);
         link.click();
         
-        // Método 2: Fallback imediato para Data URI (Melhor para Android WebView)
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64data = reader.result as string;
-          const a = document.createElement('a');
-          a.href = base64data;
-          a.download = fileName;
-          a.click();
-        };
-        reader.readAsDataURL(generatedPdfBlob);
+        // Método 2: Fallback para Data URI (Melhor para Android WebView)
+        // Usamos um pequeno delay para não interferir com o primeiro se ele funcionar
+        setTimeout(() => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const base64data = reader.result as string;
+            const a = document.createElement('a');
+            a.href = base64data;
+            a.download = fileName;
+            a.click();
+            
+            // Se ainda assim não funcionar no Android, tentamos abrir em nova aba
+            setTimeout(() => {
+              window.open(base64data, '_blank');
+            }, 500);
+          };
+          reader.readAsDataURL(generatedPdfBlob);
+        }, 500);
         
         showToast("Download iniciado!", "success");
         setIsPdfModalOpen(false);
