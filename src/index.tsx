@@ -54,7 +54,7 @@ const normalizeString = (str: string) =>
      .replace(/[^a-z0-9]/g, "")
      .trim();
 
-const isValidCoord = (val: any) => typeof val === 'number' && !isNaN(val) && val !== 0;
+const isValidCoord = (val: any) => typeof val === 'number' && !isNaN(val) && Math.abs(val) > 0.0001;
 
 const MapViewUpdater: React.FC<{ center: [number, number] }> = ({ center }) => {
   const map = useMap();
@@ -66,9 +66,12 @@ const MapViewUpdater: React.FC<{ center: [number, number] }> = ({ center }) => {
   return null;
 };
 
-const MapEvents: React.FC<{ onMoveStart: () => void }> = ({ onMoveStart }) => {
+const MapEvents: React.FC<{ onMoveStart: () => void, onMapClick?: (lat: number, lon: number) => void }> = ({ onMoveStart, onMapClick }) => {
   useMapEvents({
     movestart: onMoveStart,
+    click: (e) => {
+      if (onMapClick) onMapClick(e.latlng.lat, e.latlng.lng);
+    },
   });
   return null;
 };
@@ -344,39 +347,66 @@ const App: React.FC = () => {
     return currentResult?.batchResults || (currentResult ? [currentResult] : []);
   }, [currentResult]);
 
+  const [isPublicView, setIsPublicView] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
   const lastLocRef = useRef<{lat: number, lon: number}>({lat: 0, lon: 0});
+
+  const [gpsStatus, setGpsStatus] = useState<'active' | 'warning' | 'error'>('active');
+  const [fileInputKey, setFileInputKey] = useState(0);
+
+  const lastWatchGeocodeTimeRef = useRef<number>(0);
 
   // Real-time location tracking
   useEffect(() => {
     if (!navigator.geolocation) return;
 
-    const watchId = navigator.geolocation.watchPosition(
-      async (position) => {
-        const { latitude, longitude } = position.coords;
-        const dist = Math.sqrt(Math.pow(latitude - lastLocRef.current.lat, 2) + Math.pow(longitude - lastLocRef.current.lon, 2));
-        
-        if (dist > 0.0001 || !location) {
-          lastLocRef.current = { lat: latitude, lon: longitude };
-          try {
-            const address = await getReverseGeocoding(latitude, longitude);
-            setLocation({ lat: latitude, lon: longitude, address });
-          } catch (e) {
-            console.error("Erro ao obter endereço:", e);
-            setLocation(prev => prev ? { ...prev, lat: latitude, lon: longitude } : { lat: latitude, lon: longitude, address: "Localização Atual" });
-          }
-        }
-      },
-      (error) => {
-        console.error("Erro ao rastrear localização:", error);
-        // Tenta reiniciar o watch se houver erro de timeout
-        if (error.code === error.TIMEOUT) {
-          console.log("Reiniciando rastreamento de localização...");
-        }
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-    );
+    let watchId: number;
+    const startWatching = () => {
+      watchId = navigator.geolocation.watchPosition(
+        async (position) => {
+          const { latitude, longitude, accuracy } = position.coords;
+          
+          if (!isValidCoord(latitude) || !isValidCoord(longitude)) return;
 
+          const dist = Math.sqrt(Math.pow(latitude - lastLocRef.current.lat, 2) + Math.pow(longitude - lastLocRef.current.lon, 2));
+          const now = Date.now();
+          
+          // Só atualiza se moveu significativamente OU se passou mais de 30 segundos
+          if (dist > 0.0002 || !location || (now - lastWatchGeocodeTimeRef.current > 30000)) {
+            lastLocRef.current = { lat: latitude, lon: longitude };
+            setGpsStatus('active');
+            
+            // Throttle para geocodificação no watch: no máximo 1 a cada 15 segundos
+            if (now - lastWatchGeocodeTimeRef.current > 15000 || !location) {
+              lastWatchGeocodeTimeRef.current = now;
+              try {
+                const address = await getReverseGeocoding(latitude, longitude);
+                setLocation({ lat: latitude, lon: longitude, address });
+              } catch (e) {
+                console.error("Erro ao obter endereço:", e);
+                setLocation(prev => prev ? { ...prev, lat: latitude, lon: longitude } : { lat: latitude, lon: longitude, address: "Localização Atual" });
+              }
+            } else {
+              // Apenas atualiza as coordenadas sem chamar a API de endereço
+              setLocation(prev => prev ? { ...prev, lat: latitude, lon: longitude } : { lat: latitude, lon: longitude, address: "Localização Atual" });
+            }
+          }
+        },
+        (error) => {
+          console.error("Erro ao rastrear localização:", error);
+          setGpsStatus('warning');
+          if (error.code === error.TIMEOUT) {
+            console.log("Reiniciando rastreamento de localização devido a timeout...");
+            navigator.geolocation.clearWatch(watchId);
+            setTimeout(startWatching, 5000);
+          }
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+      );
+    };
+
+    startWatching();
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
@@ -436,17 +466,57 @@ const App: React.FC = () => {
     }
   }, [view]);
 
-  // Monitoramento de conexão
+  // Deep Link & Heatmap Link Handler
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+    const initApp = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const viewParam = params.get('view');
+      const userIdParam = params.get('userId');
+      
+      if (viewParam === 'heatmap' && userIdParam) {
+        setIsPublicView(true);
+        setLoading(true);
+        showToast("Carregando Mapa de Calor Público...", "info");
+        try {
+          await fetchHistory(true, userIdParam);
+          setView('map');
+          setMapMode('satellite');
+        } catch (err) {
+          showToast("Erro ao carregar mapa de calor.", "error");
+        } finally {
+          setLoading(false);
+        }
+      }
     };
-  }, []);
+    initApp();
+  }, [user?.id]);
+
+  const openInNativeMaps = (lat: number, lon: number) => {
+    const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+    window.open(url, '_blank');
+  };
+
+  const generateHeatmapLink = () => {
+    if (!user) return;
+    // Usamos o origin atual para garantir que o link aponte para o ambiente correto (produção ou dev)
+    const baseUrl = window.location.origin;
+    const link = `${baseUrl}?view=heatmap&userId=${user.id}`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: 'Mapa de Calor PestScan Pro',
+        text: 'Confira os pontos de pragas em tempo real nesta unidade.',
+        url: link
+      }).then(() => showToast("Link compartilhado!", "success"))
+        .catch(() => {
+          navigator.clipboard.writeText(link);
+          showToast("Link copiado para a área de transferência!", "success");
+        });
+    } else {
+      navigator.clipboard.writeText(link);
+      showToast("Link copiado!", "success");
+    }
+  };
 
   // Registro do Service Worker para PWA
   useEffect(() => {
@@ -624,20 +694,42 @@ const App: React.FC = () => {
     });
   }, []);
 
-  const fetchHistory = async (force = false) => {
-    if (!user || (isFetching && !force)) return;
+  const fetchHistory = async (force = false, publicUserId?: string) => {
+    const targetId = publicUserId || user?.id;
+    if (!targetId && !publicUserId) return;
+    if (isFetching && !force) return;
+    
+    // Tenta carregar do cache local primeiro se estiver offline ou para carregamento instantâneo
+    const cacheKey = `pestscan_history_${targetId}`;
+    const cachedData = localStorage.getItem(cacheKey);
+    if (cachedData && !force) {
+      try {
+        const parsed = JSON.parse(cachedData);
+        if (parsed.length > 0) {
+          setHistory(parsed);
+          if (!navigator.onLine) return; // Se offline, para por aqui
+        }
+      } catch (e) {
+        console.error("[History] Erro ao ler cache:", e);
+      }
+    }
+
     setIsFetching(true);
     try {
-      console.log("[History] Iniciando busca de registros...");
+      console.log(`[History] Buscando registros para: ${targetId}`);
       let query = supabase
         .from('pest_detections')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(100);
 
-      const isAdmin = user.email === 'juan.terra53@gmail.com';
-      if (!isAdmin) {
-        query = query.eq('user_id', user.id);
+      if (publicUserId) {
+        query = query.eq('user_id', publicUserId);
+      } else if (user) {
+        const isAdmin = user.email === 'juan.terra53@gmail.com';
+        if (!isAdmin) {
+          query = query.eq('user_id', user.id);
+        }
       }
 
       const { data, error } = await query;
@@ -646,6 +738,7 @@ const App: React.FC = () => {
       if (data) {
         console.log(`[History] ${data.length} registros encontrados.`);
         const mappedHistory = data.map((item: any) => {
+          // ... mapping logic (already exists) ...
           console.log(`[History] Item ID: ${item.id}, Image Data length: ${item.image_data?.length || 0}, Image Data starts with: ${item.image_data?.substring(0, 30)}...`);
           let result = item.analysis_result;
           if (typeof result === 'string') {
@@ -681,6 +774,9 @@ const App: React.FC = () => {
         
         console.log("[History] Mapped History sample image:", mappedHistory[0]?.image?.substring(0, 30));
         
+        // Salva no cache local
+        localStorage.setItem(`pestscan_history_${targetId}`, JSON.stringify(mappedHistory));
+
         // Só atualiza se houver mudança real ou se for forçado
         setHistory(prev => {
           // Comparação mais rápida: se o tamanho mudou ou se o ID do primeiro item mudou
@@ -701,6 +797,108 @@ const App: React.FC = () => {
       setIsFetching(false);
     }
   };
+
+  // URL Parameter Handling for AI Studio / Vercel
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const viewParam = params.get('view');
+    const userParam = params.get('user');
+    
+    if (viewParam === 'map') {
+      if (userParam) {
+        setIsPublicView(true);
+        fetchHistory(true, userParam);
+      }
+      setView('map');
+    }
+  }, [user]);
+
+  const syncOfflineDetections = async () => {
+    if (!navigator.onLine || !user || user.id === 'offline' || isSyncing) return;
+    
+    const queue = JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]');
+    if (queue.length === 0) return;
+
+    setIsSyncing(true);
+    console.log(`[Sync] Sincronizando ${queue.length} itens pendentes...`);
+    
+    const remainingQueue = [];
+    let successCount = 0;
+
+    for (const item of queue) {
+      try {
+        let imageUrl = item.image_data;
+        
+        // Se for base64, tenta subir pro storage
+        if (imageUrl?.startsWith('data:')) {
+          try {
+            const blob = base64ToBlob(imageUrl);
+            const fileName = `${user.id}/sync_${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
+            const { error: uploadError } = await supabase.storage
+              .from('pest_detections')
+              .upload(fileName, blob, { contentType: 'image/jpeg' });
+
+            if (!uploadError) {
+              const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
+              imageUrl = data.publicUrl;
+            }
+          } catch (e) {
+            console.warn("[Sync] Falha no upload da imagem, mantendo local:", e);
+          }
+        }
+
+        const { error: insertError } = await supabase.from('pest_detections').insert([{ 
+          user_id: user.id, 
+          image_data: imageUrl, 
+          pest_name: item.pest_name, 
+          confidence: item.confidence, 
+          latitude: item.latitude,
+          longitude: item.longitude,
+          location_name: item.location_name,
+          analysis_result: item.analysis_result,
+          created_at: new Date(item.timestamp).toISOString()
+        }]);
+
+        if (insertError) throw insertError;
+        successCount++;
+      } catch (e) {
+        console.error("[Sync] Erro ao sincronizar item:", e);
+        remainingQueue.push(item);
+      }
+    }
+
+    localStorage.setItem('pestscan_offline_queue', JSON.stringify(remainingQueue));
+    setIsSyncing(false);
+    
+    if (successCount > 0) {
+      showToast(`${successCount} detecções sincronizadas com sucesso!`, "success");
+      fetchHistory(true);
+    }
+  };
+
+  // Monitora estado online e sincroniza
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      showToast("Conexão restaurada! Sincronizando dados...", "success");
+      syncOfflineDetections();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      showToast("Você está offline. As detecções serão salvas localmente.", "info");
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    
+    // Tenta sincronizar ao carregar se estiver online
+    if (navigator.onLine) syncOfflineDetections();
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [user]);
   
     const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
@@ -1153,40 +1351,123 @@ const App: React.FC = () => {
     });
   };
 
-  const getGeolocation = (): Promise<GeolocationPosition> => {
+  const getGeolocation = (force = false): Promise<GeolocationPosition> => {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
         reject(new Error("Geolocalização não suportada"));
         return;
       }
+
+      const options = {
+        enableHighAccuracy: true,
+        timeout: force ? 25000 : 20000, // Aumentado para dar mais tempo ao GPS em áreas difíceis
+        maximumAge: force ? 0 : 10000
+      };
+
       navigator.geolocation.getCurrentPosition(resolve, (err) => {
-        // Fallback para baixa precisão se alta precisão falhar ou demorar
-        console.warn("Tentando geolocalização com baixa precisão...");
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
+        console.warn("Alta precisão falhou, tentando modo balanceado...", err);
+        
+        if (err.code === err.PERMISSION_DENIED) {
+          reject(new Error("Permissão de localização negada. Clique no ícone de cadeado (🔒) na barra de endereços e ative a 'Localização'."));
+          return;
+        }
+
+        navigator.geolocation.getCurrentPosition(resolve, (err2) => {
+          if (err2.code === err2.TIMEOUT) {
+            reject(new Error("Tempo esgotado ao buscar sinal de GPS."));
+          } else if (err2.code === err2.POSITION_UNAVAILABLE) {
+            reject(new Error("Sinal de GPS indisponível no momento."));
+          } else {
+            reject(new Error("Não foi possível obter sua localização."));
+          }
+        }, {
           enableHighAccuracy: false,
-          timeout: 10000,
+          timeout: 20000,
           maximumAge: 30000
         });
-      }, {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0
-      });
+      }, options);
     });
   };
 
-  const getReverseGeocoding = async (lat: number, lon: number): Promise<string> => {
+  const forceRefreshLocation = async () => {
+    setLoading(true);
+    showToast("Atualizando GPS de alta precisão...", "info");
     try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`);
-      const data = await res.json();
-      if (data.address) {
-        const city = data.address.city || data.address.town || data.address.village || data.address.suburb || "Cidade Desconhecida";
-        const state = data.address.state || "";
-        return `${city}${state ? `, ${state}` : ""}`;
+      const pos = await getGeolocation(true);
+      const { latitude, longitude } = pos.coords;
+      
+      if (!isValidCoord(latitude) || !isValidCoord(longitude)) {
+        throw new Error("Coordenadas inválidas recebidas do GPS.");
       }
-      return "Localização Desconhecida";
+
+      const address = await getReverseGeocoding(latitude, longitude);
+      setLocation({ lat: latitude, lon: longitude, address });
+      setGpsStatus('active');
+      setShouldFollowUser(true);
+      setMapKey(k => k + 1);
+      showToast("Localização atualizada!", "success");
+    } catch (err: any) {
+      console.error("Erro ao forçar localização:", err);
+      setGpsStatus('error');
+      
+      if (err.message?.includes("Permissão") || err.message?.includes("denied")) {
+        showToast("GPS Bloqueado. Você pode clicar no mapa para definir sua posição manualmente.", "info");
+      } else if (location && isValidCoord(location.lat)) {
+        showToast("GPS Instável - Usando última posição", "info");
+      } else {
+        showToast(err.message || "Não foi possível obter precisão total.", "error");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const lastGeocodeTimeRef = useRef<number>(0);
+
+  const getReverseGeocoding = async (lat: number, lon: number): Promise<string> => {
+    // Evita chamadas excessivas (máximo 1 a cada 2 segundos para o mesmo componente)
+    const now = Date.now();
+    if (now - lastGeocodeTimeRef.current < 2000) {
+      return location?.address || "Localização Atual";
+    }
+    lastGeocodeTimeRef.current = now;
+
+    try {
+      // TENTATIVA 1: Nominatim (OpenStreetMap)
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=14`, {
+        headers: { 'User-Agent': 'PestScanPro/1.0 (juan.terra53@gmail.com)' },
+        signal: AbortSignal.timeout(5000) // Timeout de 5s
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (data.address) {
+          const city = data.address.city || data.address.town || data.address.village || data.address.municipality || data.address.city_district || data.address.suburb || data.address.hamlet || data.address.county || "Cidade Desconhecida";
+          const state = data.address.state || "";
+          return `${city}${state ? `, ${state}` : ""}`;
+        }
+      }
+      throw new Error("Nominatim failed");
     } catch (e) {
-      return "Localização Indisponível";
+      console.warn("Nominatim falhou, tentando fallback...", e);
+      
+      try {
+        // TENTATIVA 2: BigDataCloud (Fallback mais estável para Client-side)
+        const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=pt`, {
+          signal: AbortSignal.timeout(5000)
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          const city = data.city || data.locality || data.principalSubdivision || "Cidade Desconhecida";
+          const state = data.principalSubdivisionCode?.split('-')[1] || "";
+          return `${city}${state ? `, ${state}` : ""}`;
+        }
+      } catch (fallbackErr) {
+        console.error("Todos os serviços de geocodificação falharam:", fallbackErr);
+      }
+      
+      return location?.address || "Localização Indisponível";
     }
   };
 
@@ -1259,7 +1540,7 @@ const App: React.FC = () => {
         
         let errorMsg = "Não foi possível acessar a câmera.";
         if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError' || e.message?.includes("Permission denied")) {
-          errorMsg = "Permissão da câmera negada. Por favor, autorize o acesso nas configurações do seu navegador ou do dispositivo para continuar.";
+          errorMsg = "Permissão da câmera negada. Clique no ícone de cadeado (🔒) na barra de endereços do seu navegador e altere 'Câmera' para 'Permitir'.";
         } else if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
           errorMsg = "Nenhuma câmera encontrada neste dispositivo.";
         } else if (e.name === 'NotReadableError' || e.name === 'TrackStartError') {
@@ -1468,6 +1749,9 @@ const App: React.FC = () => {
             image_data: imageUrl || dataUrl, 
             pest_name: res.pest?.name || 'Scan', 
             confidence: Number(res.confidence) || 0, 
+            latitude: validatedLoc.lat,
+            longitude: validatedLoc.lon,
+            location_name: validatedLoc.address,
             analysis_result: dbResult // Salvamos tudo no JSON para compatibilidade total
           }]).select();
 
@@ -1485,8 +1769,40 @@ const App: React.FC = () => {
           fetchHistory();
         } catch (e: any) {
           console.error("❌ Erro ao salvar histórico no Supabase:", e);
-          const errorMsg = e.message || e.details || "Erro de rede ou permissão";
-          showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
+          
+          // SALVAMENTO OFFLINE (QUEUE)
+          if (!navigator.onLine || e.message?.includes("Failed to fetch") || e.message?.includes("network")) {
+            console.log("[Offline] Adicionando à fila de sincronização...");
+            const offlineItem = {
+              pest_name: res.pest?.name || 'Scan',
+              confidence: Number(res.confidence) || 0,
+              latitude: validatedLoc.lat,
+              longitude: validatedLoc.lon,
+              location_name: validatedLoc.address,
+              analysis_result: { ...res, location: { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address } },
+              image_data: dataUrl, // Mantém base64 para sincronizar depois
+              timestamp: Date.now()
+            };
+            
+            const queue = JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]');
+            queue.push(offlineItem);
+            localStorage.setItem('pestscan_offline_queue', JSON.stringify(queue));
+            
+            showToast("Offline: Detecção salva localmente e será sincronizada em breve.", "info");
+            
+            // Atualiza o histórico local imediatamente para mostrar no mapa
+            const localEntry = {
+              id: `temp_${Date.now()}`,
+              timestamp: offlineItem.timestamp,
+              image: dataUrl,
+              result: offlineItem.analysis_result,
+              location: offlineItem.location_name
+            };
+            setHistory(prev => [localEntry, ...prev]);
+          } else {
+            const errorMsg = e.message || e.details || "Erro de rede ou permissão";
+            showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
+          }
         }
       }
     } catch (e: any) {
@@ -1503,6 +1819,8 @@ const App: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    setFileInputKey(prev => prev + 1);
     const startTime = Date.now();
     setLoading(true); setError(null);
     
@@ -1653,6 +1971,9 @@ const App: React.FC = () => {
             image_data: imageUrl || resizedDataUrl, 
             pest_name: res.pest?.name || 'Scan', 
             confidence: Number(res.confidence) || 0, 
+            latitude: validatedLoc.lat,
+            longitude: validatedLoc.lon,
+            location_name: validatedLoc.address,
             analysis_result: dbResult
           }]).select();
 
@@ -1667,8 +1988,40 @@ const App: React.FC = () => {
           fetchHistory();
         } catch (e: any) {
           console.error("❌ Erro ao salvar histórico de arquivo no Supabase:", e);
-          const errorMsg = e.message || e.details || "Erro de rede ou permissão";
-          showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
+          
+          // SALVAMENTO OFFLINE (QUEUE)
+          if (!navigator.onLine || e.message?.includes("Failed to fetch") || e.message?.includes("network")) {
+            console.log("[Offline] Adicionando arquivo à fila de sincronização...");
+            const offlineItem = {
+              pest_name: res.pest?.name || 'Scan',
+              confidence: Number(res.confidence) || 0,
+              latitude: validatedLoc.lat,
+              longitude: validatedLoc.lon,
+              location_name: validatedLoc.address,
+              analysis_result: { ...res, location: { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address } },
+              image_data: resizedDataUrl, // Mantém base64 para sincronizar depois
+              timestamp: Date.now()
+            };
+            
+            const queue = JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]');
+            queue.push(offlineItem);
+            localStorage.setItem('pestscan_offline_queue', JSON.stringify(queue));
+            
+            showToast("Offline: Arquivo salvo localmente e será sincronizado em breve.", "info");
+            
+            // Atualiza o histórico local imediatamente para mostrar no mapa
+            const localEntry = {
+              id: `temp_file_${Date.now()}`,
+              timestamp: offlineItem.timestamp,
+              image: resizedDataUrl,
+              result: offlineItem.analysis_result,
+              location: offlineItem.location_name
+            };
+            setHistory(prev => [localEntry, ...prev]);
+          } else {
+            const errorMsg = e.message || e.details || "Erro de rede ou permissão";
+            showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
+          }
         }
       }
     } catch (e: any) {
@@ -1881,7 +2234,7 @@ const App: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col max-w-md mx-auto relative overflow-hidden pb-[env(safe-area-inset-bottom)]">
+    <div className="h-screen h-[100dvh] bg-slate-50 flex flex-col max-w-md mx-auto relative overflow-hidden pb-[env(safe-area-inset-bottom)]">
       {/* Custom Modal */}
       {modal.isOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
@@ -1931,7 +2284,8 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <header className="bg-emerald-900 p-6 pt-[calc(3rem+env(safe-area-inset-top))] pb-12 rounded-b-[4rem] text-white sticky top-0 z-40 shadow-2xl border-b border-emerald-800/50">
+      {!isPublicView && (
+        <header className="bg-emerald-900 p-6 pt-[calc(3rem+env(safe-area-inset-top))] pb-12 rounded-b-[4rem] text-white sticky top-0 z-40 shadow-2xl border-b border-emerald-800/50">
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-4">
             <div className="bg-emerald-400/10 p-3 rounded-2xl backdrop-blur-md border border-emerald-400/20 shadow-lg relative group">
@@ -1940,14 +2294,29 @@ const App: React.FC = () => {
             </div>
             <div>
               <h1 className="font-black text-2xl text-white tracking-tighter">PestScan Pro</h1>
-              <div className="flex flex-col gap-1 mt-0.5">
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse' : 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]'}`} />
-                  <span className={`text-[9px] font-black uppercase tracking-[0.2em] ${isOnline ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {isOnline ? 'IA ONLINE' : 'MODO OFFLINE'}
-                  </span>
+                <div className="flex flex-col gap-1.5 mt-1">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse' : 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]'}`} />
+                    <span className={`text-[8px] font-black uppercase tracking-[0.2em] ${isOnline ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {isOnline ? 'IA ONLINE' : 'MODO OFFLINE'}
+                    </span>
+                    {JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]').length > 0 && (
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          syncOfflineDetections();
+                        }}
+                        disabled={isSyncing || !isOnline}
+                        className="flex items-center gap-2 bg-amber-500/20 px-2 py-1 rounded-full border border-amber-500/30 animate-pulse active:scale-95 transition-all ml-1"
+                      >
+                        <RefreshCw size={10} className={`text-amber-400 ${isSyncing ? 'animate-spin' : ''}`} />
+                        <span className="text-[8px] font-black text-amber-400 uppercase tracking-widest">
+                          {isSyncing ? 'Sincronizando...' : `${JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]').length} Pendentes`}
+                        </span>
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -2001,6 +2370,7 @@ const App: React.FC = () => {
           </div>
         </div>
       </header>
+      )}
 
       <main className="flex-1 p-6 pb-40 overflow-y-auto">
         {error && (
@@ -2010,13 +2380,34 @@ const App: React.FC = () => {
               <p className="text-xs leading-relaxed font-bold flex-1">{error}</p>
             </div>
             {view === 'camera' && (
-              <button 
-                onClick={() => initCamera()}
-                className="flex items-center justify-center gap-2 px-6 py-3 bg-red-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all w-full"
-              >
-                <RefreshCw size={14} />
-                Tentar Novamente
-              </button>
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={() => initCamera()}
+                  className="flex items-center justify-center gap-2 px-6 py-3 bg-red-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all w-full"
+                >
+                  <RefreshCw size={14} />
+                  Tentar Novamente
+                </button>
+                {(error.includes("Permissão") || error.includes("cadeado")) && (
+                  <div className="bg-white/60 p-5 rounded-[2rem] border border-red-100 shadow-sm">
+                    <p className="text-[10px] font-black text-red-900 mb-3 uppercase tracking-wider">Como resolver o bloqueio:</p>
+                    <ul className="text-[9px] text-red-800 space-y-2 font-bold leading-relaxed">
+                      <li className="flex gap-2">
+                        <span className="bg-red-200 text-red-900 w-4 h-4 rounded-full flex items-center justify-center shrink-0">1</span>
+                        <span>Toque no ícone de <b>cadeado (🔒)</b> ou <b>ajustes</b> na barra de endereços acima.</span>
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="bg-red-200 text-red-900 w-4 h-4 rounded-full flex items-center justify-center shrink-0">2</span>
+                        <span>Ative a permissão de <b>Câmera</b> e <b>Localização</b>.</span>
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="bg-red-200 text-red-900 w-4 h-4 rounded-full flex items-center justify-center shrink-0">3</span>
+                        <span>Recarregue a página para aplicar as mudanças.</span>
+                      </li>
+                    </ul>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -2108,12 +2499,24 @@ const App: React.FC = () => {
                 
                 <div className="absolute top-6 left-6 flex gap-3 z-50">
                   <button 
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={() => {
+                      if (fileInputRef.current) {
+                        fileInputRef.current.value = '';
+                        fileInputRef.current.click();
+                      }
+                    }}
                     className="p-5 rounded-2xl bg-black/40 text-white border border-white/20 transition-all active:scale-90"
                   >
                     <ImageIcon size={24} />
                   </button>
-                  <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
+                  <input 
+                    key={fileInputKey}
+                    type="file" 
+                    ref={fileInputRef} 
+                    className="hidden" 
+                    accept="image/*" 
+                    onChange={handleFileUpload} 
+                  />
                 </div>
 
                 {hasFlash && (
@@ -2146,11 +2549,30 @@ const App: React.FC = () => {
               <div className="flex items-center gap-4 mb-6">
                 <div className="flex items-center gap-2">
                   <button 
-                    onClick={() => fetchHistory()}
+                    onClick={() => fetchHistory(true)}
                     className="p-3 bg-slate-50 hover:bg-slate-100 rounded-2xl transition-colors border border-slate-100 text-slate-400"
                     title="Atualizar Dados"
                   >
-                    <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+                    <RefreshCw size={18} className={isFetching ? 'animate-spin' : ''} />
+                  </button>
+                  <button 
+                    onClick={() => {
+                      const shareUrl = `${window.location.origin}?view=map&user=${user?.id || 'public'}`;
+                      if (navigator.share) {
+                        navigator.share({
+                          title: 'Mapa de Calor - PestScan Pro',
+                          text: 'Confira o mapa de calor de pragas urbanas!',
+                          url: shareUrl
+                        }).catch(console.error);
+                      } else {
+                        navigator.clipboard.writeText(shareUrl);
+                        showToast("Link do mapa copiado!", "success");
+                      }
+                    }}
+                    className="p-3 bg-emerald-50 hover:bg-emerald-100 rounded-2xl transition-colors border border-emerald-100 text-emerald-600"
+                    title="Compartilhar Mapa"
+                  >
+                    <Share2 size={18} />
                   </button>
                   <div className="bg-emerald-500 p-3 rounded-2xl text-white shadow-lg shadow-emerald-500/20">
                     <MapIcon size={24} />
@@ -2182,20 +2604,6 @@ const App: React.FC = () => {
                   >
                     <Globe className="w-6 h-6" />
                   </button>
-                  <button 
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setShouldFollowUser(true);
-                      if (location) {
-                        setMapKey(k => k + 1); // Força re-render para centralizar
-                      }
-                    }}
-                    className={`bg-white p-3 rounded-2xl shadow-xl hover:bg-slate-50 active:scale-95 transition-all border-2 ${shouldFollowUser ? 'border-emerald-500 text-emerald-600' : 'border-slate-100 text-slate-400'}`}
-                    title="Centralizar em Mim"
-                  >
-                    <MapIcon className="w-6 h-6" />
-                  </button>
                 </div>
 
                 <ErrorBoundary>
@@ -2212,8 +2620,35 @@ const App: React.FC = () => {
                     style={{ height: '100%', width: '100%' }}
                     scrollWheelZoom={true}
                   >
-                    <MapEvents onMoveStart={() => setShouldFollowUser(false)} />
+                    <MapEvents 
+                      onMoveStart={() => setShouldFollowUser(false)} 
+                      onMapClick={async (lat, lon) => {
+                        try {
+                          const address = await getReverseGeocoding(lat, lon);
+                          setLocation({ lat, lon, address });
+                          setGpsStatus('active');
+                          showToast("Localização definida manualmente!", "success");
+                        } catch (e) {
+                          showToast("Erro ao definir localização.", "error");
+                        }
+                      }}
+                    />
                     {location && isValidCoord(location.lat) && isValidCoord(location.lon) && shouldFollowUser && <MapViewUpdater center={[location.lat, location.lon]} />}
+                    
+                    {location && isValidCoord(location.lat) && isValidCoord(location.lon) && (
+                      <CircleMarker 
+                        center={[location.lat, location.lon]}
+                        radius={6}
+                        pathOptions={{ fillColor: '#3b82f6', fillOpacity: 0.8, color: 'white', weight: 2 }}
+                      >
+                        <Popup>
+                          <div className="text-center">
+                            <p className="font-black text-[10px] uppercase tracking-widest text-blue-600">Sua Localização</p>
+                            <p className="text-[9px] text-slate-400 mt-1">{location.address}</p>
+                          </div>
+                        </Popup>
+                      </CircleMarker>
+                    )}
                     {mapMode === 'street' ? (
                       <TileLayer
                         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -2244,6 +2679,8 @@ const App: React.FC = () => {
                         const lat = entry.result?.location?.latitude || 0;
                         const lon = entry.result?.location?.longitude || 0;
                         const address = entry.location || "Localização Desconhecida";
+                        const confidence = typeof entry.result?.confidence === 'number' ? entry.result.confidence : 0;
+                        const pestName = entry.result?.pest?.name || 'Scan';
                         
                         if (!isValidCoord(lat) || !isValidCoord(lon)) return null;
 
@@ -2254,7 +2691,7 @@ const App: React.FC = () => {
                               center={[lat, lon]}
                               radius={400}
                               pathOptions={{ 
-                                fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
                                 fillOpacity: 0.05,
                                 color: 'transparent'
                               }}
@@ -2263,7 +2700,7 @@ const App: React.FC = () => {
                               center={[lat, lon]}
                               radius={200}
                               pathOptions={{ 
-                                fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
                                 fillOpacity: 0.1,
                                 color: 'transparent'
                               }}
@@ -2272,7 +2709,7 @@ const App: React.FC = () => {
                               center={[lat, lon]}
                               radius={100}
                               pathOptions={{ 
-                                fillColor: entry.result.confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
                                 fillOpacity: 0.2,
                                 color: 'transparent'
                               }}
@@ -2290,7 +2727,7 @@ const App: React.FC = () => {
                                     referrerPolicy="no-referrer"
                                   />
                                   <div className="flex items-center justify-between mb-1">
-                                    <p className="font-black text-xs text-slate-900 uppercase leading-none">{entry.result.pest?.name || 'Scan'}</p>
+                                    <p className="font-black text-xs text-slate-900 uppercase leading-none">{pestName}</p>
                                   </div>
                                   <div className="space-y-1 border-t border-slate-100 pt-2 mt-2">
                                     <p className="text-[9px] text-slate-500 flex items-center gap-1 font-bold">
@@ -2302,9 +2739,9 @@ const App: React.FC = () => {
                                   </div>
                                   <div className="flex items-center gap-2 mt-2">
                                     <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                      <div className="h-full bg-emerald-500" style={{ width: `${entry.result.confidence * 100}%` }} />
+                                      <div className="h-full bg-emerald-500" style={{ width: `${confidence * 100}%` }} />
                                     </div>
-                                    <span className="text-[9px] font-black text-emerald-600">{(entry.result.confidence * 100).toFixed(0)}%</span>
+                                    <span className="text-[9px] font-black text-emerald-600">{(confidence * 100).toFixed(0)}%</span>
                                   </div>
                                 </div>
                               </Popup>
@@ -2400,6 +2837,13 @@ const App: React.FC = () => {
             <div className="flex justify-between items-center px-2">
               <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Scans Recentes</h3>
               <div className="flex gap-2">
+                <button 
+                  onClick={generateHeatmapLink}
+                  className="flex items-center gap-2 text-[9px] font-black text-amber-600 uppercase tracking-widest bg-amber-50 px-3 py-1.5 rounded-full active:scale-95 transition-all"
+                >
+                  <Share2 size={12} />
+                  Mapa de Calor
+                </button>
                 <button 
                   onClick={() => {
                     setIsSelectionMode(!isSelectionMode);
@@ -2546,6 +2990,15 @@ const App: React.FC = () => {
                     <div className="bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-emerald-900 text-[9px] font-black shadow-lg border border-emerald-100 uppercase tracking-widest">
                       {currentResult.source}
                     </div>
+                  )}
+                  {currentResult.location && (
+                    <button 
+                      onClick={() => openInNativeMaps(currentResult.location!.latitude, currentResult.location!.longitude)}
+                      className="bg-white/90 backdrop-blur-md p-3 rounded-2xl text-slate-900 shadow-xl border border-white/20 active:scale-95 transition-all flex items-center gap-2"
+                    >
+                      <MapPin size={16} className="text-emerald-500" />
+                      <span className="text-[10px] font-black uppercase tracking-widest">Google Maps</span>
+                    </button>
                   )}
                 </div>
               </div>
@@ -3238,21 +3691,23 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-100 px-10 pt-5 pb-10 flex justify-between items-center z-50 rounded-t-[3.5rem] shadow-[0_-20px_50px_-15px_rgba(0,0,0,0.08)]">
-        <button onClick={() => { setView('main'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all w-20 ${view === 'main' || view === 'detail' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
-          <BookOpen size={24} />
-          <span className="text-[9px] font-black uppercase tracking-widest">Guia</span>
-        </button>
-        
-        <button onClick={handleCapture} className="w-20 h-20 -mt-20 bg-emerald-600 rounded-full flex items-center justify-center border-[6px] border-white shadow-2xl active:scale-90 transition-all text-white group">
-          <Camera size={30} className="group-hover:scale-110 transition-transform" />
-        </button>
-        
-        <button onClick={() => { setView('history'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all w-20 ${view === 'history' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
-          <History size={24} />
-          <span className="text-[9px] font-black uppercase tracking-widest">Scans</span>
-        </button>
-      </nav>
+      {!isPublicView && (
+        <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-100 px-10 pt-5 pb-10 flex justify-between items-center z-50 rounded-t-[3.5rem] shadow-[0_-20px_50px_-15px_rgba(0,0,0,0.08)]">
+          <button onClick={() => { setView('main'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all w-20 ${view === 'main' || view === 'detail' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
+            <BookOpen size={24} />
+            <span className="text-[9px] font-black uppercase tracking-widest">Guia</span>
+          </button>
+          
+          <button onClick={handleCapture} className="w-20 h-20 -mt-20 bg-emerald-600 rounded-full flex items-center justify-center border-[6px] border-white shadow-2xl active:scale-90 transition-all text-white group">
+            <Camera size={30} className="group-hover:scale-110 transition-transform" />
+          </button>
+          
+          <button onClick={() => { setView('history'); stopCamera(); }} className={`flex flex-col items-center gap-1.5 transition-all w-20 ${view === 'history' ? 'text-emerald-600 scale-110' : 'text-slate-300'}`}>
+            <History size={24} />
+            <span className="text-[9px] font-black uppercase tracking-widest">Scans</span>
+          </button>
+        </nav>
+      )}
 
       {loading && (
         <div className="fixed inset-0 bg-emerald-950 z-[100] flex flex-col items-center justify-center text-white p-12 text-center">
