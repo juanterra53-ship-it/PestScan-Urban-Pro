@@ -367,8 +367,14 @@ const App: React.FC = () => {
           }
         }
       },
-      (error) => console.error("Erro ao rastrear localização:", error),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      (error) => {
+        console.error("Erro ao rastrear localização:", error);
+        // Tenta reiniciar o watch se houver erro de timeout
+        if (error.code === error.TIMEOUT) {
+          console.log("Reiniciando rastreamento de localização...");
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
@@ -1132,9 +1138,17 @@ const App: React.FC = () => {
         reject(new Error("Geolocalização não suportada"));
         return;
       }
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
+      navigator.geolocation.getCurrentPosition(resolve, (err) => {
+        // Fallback para baixa precisão se alta precisão falhar ou demorar
+        console.warn("Tentando geolocalização com baixa precisão...");
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: false,
+          timeout: 10000,
+          maximumAge: 30000
+        });
+      }, {
         enableHighAccuracy: true,
-        timeout: 5000,
+        timeout: 15000,
         maximumAge: 0
       });
     });
@@ -1281,6 +1295,17 @@ const App: React.FC = () => {
           return { lat, lon, address };
         } catch (locErr) {
           console.warn("Erro ao obter localização em tempo real, usando fallback:", locErr);
+          // Se falhar e não tivermos localização prévia, tenta uma última vez sem alta precisão
+          if (!location) {
+            try {
+              const pos = await new Promise<GeolocationPosition>((res, rej) => 
+                navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: false, timeout: 5000 })
+              );
+              return { lat: pos.coords.latitude, lon: pos.coords.longitude, address: "Localização Aproximada" };
+            } catch (e) {
+              return locData;
+            }
+          }
           return locData;
         }
       })();
