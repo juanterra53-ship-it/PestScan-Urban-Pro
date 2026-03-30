@@ -921,15 +921,30 @@ const App: React.FC = () => {
     if (!isPdfModalOpen || !generatedPdfBlob) return null;
 
     const downloadPdf = (e: React.MouseEvent) => {
-      if (!pdfBase64) return;
+      if (!generatedPdfBlob) return;
       showToast("Iniciando download...", "success");
       
-      // No Android WebView, às vezes o link <a> não dispara o DownloadListener
-      // Forçamos a navegação para o Data URI para garantir que o WebView intercepte
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      if (isMobile) {
-        e.preventDefault();
-        window.location.href = pdfBase64;
+      try {
+        const url = URL.createObjectURL(generatedPdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = generatedPdfFileName || "Relatorio_PestScan.pdf";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        // No Android WebView, forçamos a navegação se o clique falhar
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        if (isMobile && pdfBase64) {
+          setTimeout(() => {
+            window.location.href = pdfBase64;
+          }, 500);
+        }
+        
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (err) {
+        console.error("Erro no download:", err);
+        if (pdfBase64) window.location.href = pdfBase64;
       }
     };
 
@@ -970,24 +985,30 @@ const App: React.FC = () => {
     };
 
     const viewPdf = () => {
-      if (!pdfBase64) return;
-      const win = window.open();
-      if (win) {
-        win.document.write(`<iframe src="${pdfBase64}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
-      } else {
-        window.location.href = pdfBase64;
+      if (!generatedPdfBlob) return;
+      try {
+        const url = URL.createObjectURL(generatedPdfBlob);
+        window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      } catch (err) {
+        if (pdfBase64) window.location.href = pdfBase64;
       }
     };
 
     const printPdf = () => {
-      if (!pdfBase64) return;
-      const win = window.open();
-      if (win) {
-        win.document.write(`<iframe src="${pdfBase64}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
-        setTimeout(() => {
-          win.print();
-        }, 1000);
-      } else {
+      if (!generatedPdfBlob) return;
+      try {
+        const url = URL.createObjectURL(generatedPdfBlob);
+        const win = window.open(url);
+        if (win) {
+          setTimeout(() => {
+            win.print();
+            URL.revokeObjectURL(url);
+          }, 1000);
+        } else {
+          window.print();
+        }
+      } catch (err) {
         window.print();
       }
     };
