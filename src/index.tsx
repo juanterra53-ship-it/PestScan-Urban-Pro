@@ -54,7 +54,7 @@ const normalizeString = (str: string) =>
      .replace(/[^a-z0-9]/g, "")
      .trim();
 
-const isValidCoord = (val: any) => typeof val === 'number' && !isNaN(val);
+const isValidCoord = (val: any) => typeof val === 'number' && !isNaN(val) && val !== 0;
 
 const MapViewUpdater: React.FC<{ center: [number, number] }> = ({ center }) => {
   const map = useMap();
@@ -1306,7 +1306,9 @@ const App: React.FC = () => {
       await new Promise(resolve => setTimeout(resolve, 800));
       
       // CAPTURA DE LOCALIZAÇÃO (EM PARALELO - NÃO BLOQUEIA O INÍCIO DA ANÁLISE)
-      let locData = location ? { lat: location.lat, lon: location.lon, address: location.address } : { lat: 0, lon: 0, address: "Localização não disponível" };
+      let locData = (location && isValidCoord(location.lat)) 
+        ? { lat: location.lat, lon: location.lon, address: location.address } 
+        : { lat: -23.5505, lon: -46.6333, address: "Localização Padrão (SP)" };
       const locationPromise = (async () => {
         try {
           const pos = await getGeolocation();
@@ -1409,9 +1411,9 @@ const App: React.FC = () => {
 
       // Aguarda a localização (se ainda não terminou)
       const finalLoc = await locationPromise;
-      const lat = isValidCoord(finalLoc.lat) ? finalLoc.lat : (location?.lat || 0);
-      const lon = isValidCoord(finalLoc.lon) ? finalLoc.lon : (location?.lon || 0);
-      const validatedLoc = { lat, lon, address: finalLoc.address || location?.address || "Localização não disponível" };
+      const lat = isValidCoord(finalLoc.lat) ? finalLoc.lat : (isValidCoord(location?.lat) ? location!.lat : -23.5505);
+      const lon = isValidCoord(finalLoc.lon) ? finalLoc.lon : (isValidCoord(location?.lon) ? location!.lon : -46.6333);
+      const validatedLoc = { lat, lon, address: finalLoc.address || location?.address || "Localização Padrão (SP)" };
       
       res.location = { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address };
       setLocation(validatedLoc);
@@ -1508,7 +1510,9 @@ const App: React.FC = () => {
     
     try {
       // CAPTURA DE LOCALIZAÇÃO (EM PARALELO)
-      let locData = location ? { lat: location.lat, lon: location.lon, address: location.address } : { lat: 0, lon: 0, address: "Localização não disponível" };
+      let locData = (location && isValidCoord(location.lat)) 
+        ? { lat: location.lat, lon: location.lon, address: location.address } 
+        : { lat: -23.5505, lon: -46.6333, address: "Localização Padrão (SP)" };
       const locationPromise = (async () => {
         try {
           const pos = await getGeolocation();
@@ -1558,9 +1562,9 @@ const App: React.FC = () => {
 
       // Aguarda a localização
       const finalLoc = await locationPromise;
-      const lat = isValidCoord(finalLoc.lat) ? finalLoc.lat : 0;
-      const lon = isValidCoord(finalLoc.lon) ? finalLoc.lon : 0;
-      const validatedLoc = { lat, lon, address: finalLoc.address };
+      const lat = isValidCoord(finalLoc.lat) ? finalLoc.lat : (isValidCoord(location?.lat) ? location!.lat : -23.5505);
+      const lon = isValidCoord(finalLoc.lon) ? finalLoc.lon : (isValidCoord(location?.lon) ? location!.lon : -46.6333);
+      const validatedLoc = { lat, lon, address: finalLoc.address || location?.address || "Localização Padrão (SP)" };
 
       res.location = { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address };
       setLocation(validatedLoc);
