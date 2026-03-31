@@ -579,6 +579,19 @@ const App: React.FC = () => {
         console.log("🚀 [App] Iniciando inicialização...");
         loadLocalModel().catch(e => console.warn("Modelo offline:", e));
         
+        const params = new URLSearchParams(window.location.search);
+        const viewParam = params.get('view');
+        const userParam = params.get('user') || params.get('userId');
+        
+        if ((viewParam === 'map' || viewParam === 'heatmap') && userParam) {
+          console.log("📍 [App] Modo Público detectado via URL");
+          setIsPublicView(true);
+          fetchHistory(true, userParam);
+          setView('map');
+          setLoading(false);
+          return;
+        }
+
         const splashPromise = new Promise(r => setTimeout(r, 800));
         
         // Timeout de 5 segundos para o Supabase para evitar travamentos
@@ -685,8 +698,8 @@ const App: React.FC = () => {
       className: 'custom-pest-marker',
       html: `
         <div style="position: relative; width: 24px; height: 24px;">
-          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background-color: #ef4444; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); z-index: 2;"></div>
-          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background-color: #ef4444; border-radius: 50%; animation: pulse 2s infinite; z-index: 1;"></div>
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 10px; height: 10px; background-color: #ef4444; border: 1.5px solid white; border-radius: 50%; box-shadow: 0 0 5px rgba(239, 68, 68, 0.3); z-index: 2;"></div>
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 10px; height: 10px; background-color: #ef4444; border-radius: 50%; opacity: 0.4; animation: pulse 3s infinite; z-index: 1;"></div>
         </div>
       `,
       iconSize: [24, 24],
@@ -702,9 +715,26 @@ const App: React.FC = () => {
     // Tenta carregar do cache local primeiro se estiver offline ou para carregamento instantâneo
     const cacheKey = `pestscan_history_${targetId}`;
     const cachedData = localStorage.getItem(cacheKey);
+    const offlineQueue = JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]');
+    
+    const mapOfflineItem = (item: any, index: number) => ({
+      id: `offline_${item.timestamp}_${index}`,
+      timestamp: item.timestamp,
+      image: item.image_data,
+      result: item.analysis_result,
+      location: item.location_name
+    });
+
     if (cachedData && !force) {
       try {
-        const parsed = JSON.parse(cachedData);
+        let parsed = JSON.parse(cachedData);
+        
+        // Adiciona itens da fila offline que ainda não foram sincronizados
+        if (offlineQueue.length > 0) {
+          const offlineEntries = offlineQueue.map(mapOfflineItem);
+          parsed = [...offlineEntries, ...parsed];
+        }
+
         if (parsed.length > 0) {
           setHistory(parsed);
           if (!navigator.onLine) return; // Se offline, para por aqui
@@ -737,7 +767,7 @@ const App: React.FC = () => {
       
       if (data) {
         console.log(`[History] ${data.length} registros encontrados.`);
-        const mappedHistory = data.map((item: any) => {
+        let mappedHistory = data.map((item: any) => {
           // ... mapping logic (already exists) ...
           console.log(`[History] Item ID: ${item.id}, Image Data length: ${item.image_data?.length || 0}, Image Data starts with: ${item.image_data?.substring(0, 30)}...`);
           let result = item.analysis_result;
@@ -771,6 +801,12 @@ const App: React.FC = () => {
             location: item.location_name || result.location?.address
           };
         });
+
+        // Adiciona itens da fila offline ao histórico carregado do servidor
+        if (offlineQueue.length > 0) {
+          const offlineEntries = offlineQueue.map(mapOfflineItem);
+          mappedHistory = [...offlineEntries, ...mappedHistory];
+        }
         
         console.log("[History] Mapped History sample image:", mappedHistory[0]?.image?.substring(0, 30));
         
@@ -802,13 +838,11 @@ const App: React.FC = () => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get('view');
-    const userParam = params.get('user');
+    const userParam = params.get('user') || params.get('userId');
     
-    if (viewParam === 'map') {
-      if (userParam) {
-        setIsPublicView(true);
-        fetchHistory(true, userParam);
-      }
+    if ((viewParam === 'map' || viewParam === 'heatmap') && userParam) {
+      setIsPublicView(true);
+      fetchHistory(true, userParam);
       setView('map');
     }
   }, [user]);
@@ -1572,6 +1606,37 @@ const App: React.FC = () => {
     }
   };
 
+  const saveToOfflineQueue = (res: RecognitionResult, validatedLoc: any, dataUrl: string) => {
+    console.log("[Offline] Adicionando à fila de sincronização...");
+    const offlineItem = {
+      pest_name: res.pest?.name || 'Scan',
+      confidence: Number(res.confidence) || 0,
+      latitude: validatedLoc.lat,
+      longitude: validatedLoc.lon,
+      location_name: validatedLoc.address,
+      analysis_result: { ...res, location: { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address } },
+      image_data: dataUrl,
+      timestamp: Date.now()
+    };
+    
+    const queue = JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]');
+    queue.push(offlineItem);
+    localStorage.setItem('pestscan_offline_queue', JSON.stringify(queue));
+    
+    showToast("Offline: Detecção salva localmente e será sincronizada em breve.", "info");
+    
+    // Atualiza o histórico local imediatamente para mostrar no mapa
+    const localEntry = {
+      id: `temp_${Date.now()}`,
+      timestamp: offlineItem.timestamp,
+      image: dataUrl,
+      result: offlineItem.analysis_result,
+      location: offlineItem.location_name
+    };
+    setHistory(prev => [localEntry, ...prev]);
+    setMapKey(k => k + 1);
+  };
+
   const handleCapture = async () => {
     setIsPdfModalOpen(false);
     if (view !== 'camera') { setView('camera'); return; }
@@ -1703,106 +1768,80 @@ const App: React.FC = () => {
       setCurrentResult(resultWithImage);
       setView('result');
 
-      if (res.pestFound && user && user.id !== 'offline') {
-        try {
-          let imageUrl = dataUrl;
+      if (res.pestFound && user) {
+        if (user.id !== 'offline') {
           try {
-            const resizedBase64 = await resizeImage(dataUrl, 800);
-            const blob = base64ToBlob(resizedBase64);
-            const fileName = `${user.id}/${Date.now()}.jpg`;
-            const { error: uploadError } = await supabase.storage
-              .from('pest_detections')
-              .upload(fileName, blob, { 
-                contentType: 'image/jpeg', 
-                cacheControl: '31536000',
-                upsert: false 
-              });
+            let imageUrl = dataUrl;
+            try {
+              const resizedBase64 = await resizeImage(dataUrl, 800);
+              const blob = base64ToBlob(resizedBase64);
+              const fileName = `${user.id}/${Date.now()}.jpg`;
+              const { error: uploadError } = await supabase.storage
+                .from('pest_detections')
+                .upload(fileName, blob, { 
+                  contentType: 'image/jpeg', 
+                  cacheControl: '31536000',
+                  upsert: false 
+                });
 
-            if (!uploadError) {
-              const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
-              imageUrl = data.publicUrl;
-            } else {
-              console.warn("Upload falhou, usando base64 otimizado:", uploadError);
-              const rawBase64 = await resizeImage(dataUrl, 400); // Fallback para base64 pequeno se falhar upload
-              imageUrl = `data:image/jpeg;base64,${rawBase64}`;
+              if (!uploadError) {
+                const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
+                imageUrl = data.publicUrl;
+              } else {
+                console.warn("Upload falhou, usando base64 otimizado:", uploadError);
+                const rawBase64 = await resizeImage(dataUrl, 400); // Fallback para base64 pequeno se falhar upload
+                imageUrl = `data:image/jpeg;base64,${rawBase64}`;
+              }
+            } catch (uploadErr) {
+              console.warn("Erro no processo de upload:", uploadErr);
             }
-          } catch (uploadErr) {
-            console.warn("Erro no processo de upload:", uploadErr);
-          }
 
-          // OTIMIZAÇÃO CRÍTICA: Remove a imagem base64 do JSON antes de salvar no banco
-          // Isso evita estourar o limite de tamanho da coluna e economiza muito espaço/tráfego
-          // Incluímos a localização dentro do dbResult para garantir que ela seja salva mesmo sem colunas extras
-          const dbResult = { 
-            ...resultWithImage, 
-            capturedImage: undefined,
-            location: {
-              latitude: validatedLoc.lat,
-              longitude: validatedLoc.lon,
-              address: validatedLoc.address
-            }
-          };
+            const dbResult = { 
+              ...resultWithImage, 
+              capturedImage: undefined,
+              location: {
+                latitude: validatedLoc.lat,
+                longitude: validatedLoc.lon,
+                address: validatedLoc.address
+              }
+            };
 
-          console.log("[History] Salvando captura no banco...");
-          const { data: insertData, error: insertError } = await supabase.from('pest_detections').insert([{ 
-            user_id: user.id, 
-            image_data: imageUrl || dataUrl, 
-            pest_name: res.pest?.name || 'Scan', 
-            confidence: Number(res.confidence) || 0, 
-            latitude: validatedLoc.lat,
-            longitude: validatedLoc.lon,
-            location_name: validatedLoc.address,
-            analysis_result: dbResult // Salvamos tudo no JSON para compatibilidade total
-          }]).select();
-
-          if (insertError) {
-            console.error("❌ [History] Erro no insert:", insertError);
-            throw insertError;
-          }
-
-          if (insertData && insertData.length > 0) {
-            const newId = insertData[0].id;
-            setCurrentResult(prev => prev ? { ...prev, id: newId } : null);
-          }
-
-          console.log("✅ [History] Salvo com sucesso!");
-          fetchHistory();
-        } catch (e: any) {
-          console.error("❌ Erro ao salvar histórico no Supabase:", e);
-          
-          // SALVAMENTO OFFLINE (QUEUE)
-          if (!navigator.onLine || e.message?.includes("Failed to fetch") || e.message?.includes("network")) {
-            console.log("[Offline] Adicionando à fila de sincronização...");
-            const offlineItem = {
-              pest_name: res.pest?.name || 'Scan',
-              confidence: Number(res.confidence) || 0,
+            console.log("[History] Salvando captura no banco...");
+            const { data: insertData, error: insertError } = await supabase.from('pest_detections').insert([{ 
+              user_id: user.id, 
+              image_data: imageUrl || dataUrl, 
+              pest_name: res.pest?.name || 'Scan', 
+              confidence: Number(res.confidence) || 0, 
               latitude: validatedLoc.lat,
               longitude: validatedLoc.lon,
               location_name: validatedLoc.address,
-              analysis_result: { ...res, location: { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address } },
-              image_data: dataUrl, // Mantém base64 para sincronizar depois
-              timestamp: Date.now()
-            };
+              analysis_result: dbResult
+            }]).select();
+
+            if (insertError) throw insertError;
+
+            if (insertData && insertData.length > 0) {
+              const newId = insertData[0].id;
+              setCurrentResult(prev => prev ? { ...prev, id: newId } : null);
+            }
+
+            console.log("✅ [History] Salvo com sucesso!");
+            fetchHistory();
+          } catch (e: any) {
+            console.error("❌ Erro ao salvar histórico no Supabase:", e);
             
-            const queue = JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]');
-            queue.push(offlineItem);
-            localStorage.setItem('pestscan_offline_queue', JSON.stringify(queue));
-            
-            showToast("Offline: Detecção salva localmente e será sincronizada em breve.", "info");
-            
-            // Atualiza o histórico local imediatamente para mostrar no mapa
-            const localEntry = {
-              id: `temp_${Date.now()}`,
-              timestamp: offlineItem.timestamp,
-              image: dataUrl,
-              result: offlineItem.analysis_result,
-              location: offlineItem.location_name
-            };
-            setHistory(prev => [localEntry, ...prev]);
-          } else {
-            const errorMsg = e.message || e.details || "Erro de rede ou permissão";
-            showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
+            // SALVAMENTO OFFLINE (QUEUE)
+            if (!navigator.onLine || e.message?.includes("Failed to fetch") || e.message?.includes("network")) {
+              saveToOfflineQueue(res, validatedLoc, dataUrl);
+            } else {
+              const errorMsg = e.message || e.details || "Erro de rede ou permissão";
+              showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
+            }
           }
+        } else {
+          // MODO OFFLINE (Sem login)
+          console.log("[Offline] Modo local sem login. Salvando apenas localmente.");
+          saveToOfflineQueue(res, validatedLoc, dataUrl);
         }
       }
     } catch (e: any) {
@@ -1927,101 +1966,81 @@ const App: React.FC = () => {
       setCurrentResult(resultWithImage);
       setView('result');
 
-      if (res.pestFound && user && user.id !== 'offline') {
-        try {
-          let imageUrl = resizedDataUrl;
-
+      if (res.pestFound && user) {
+        if (user.id !== 'offline') {
           try {
-            const blob = base64ToBlob(resizedBase64);
-            const fileName = `${user.id}/${Date.now()}_file.jpg`;
-            const { error: uploadError } = await supabase.storage
-              .from('pest_detections')
-              .upload(fileName, blob, { 
-                contentType: 'image/jpeg', 
-                cacheControl: '31536000',
-                upsert: false 
-              });
+            let imageUrl = resizedDataUrl;
 
-            if (!uploadError) {
-              const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
-              imageUrl = data.publicUrl;
-            } else {
-              console.warn("Upload falhou, usando base64 otimizado:", uploadError);
-              const rawBase64 = await resizeImage(resizedDataUrl, 400);
-              imageUrl = `data:image/jpeg;base64,${rawBase64}`;
+            try {
+              const blob = base64ToBlob(resizedBase64);
+              const fileName = `${user.id}/${Date.now()}_file.jpg`;
+              const { error: uploadError } = await supabase.storage
+                .from('pest_detections')
+                .upload(fileName, blob, { 
+                  contentType: 'image/jpeg', 
+                  cacheControl: '31536000',
+                  upsert: false 
+                });
+
+              if (!uploadError) {
+                const { data } = supabase.storage.from('pest_detections').getPublicUrl(fileName);
+                imageUrl = data.publicUrl;
+              } else {
+                console.warn("Upload falhou, usando base64 otimizado:", uploadError);
+                const rawBase64 = await resizeImage(resizedDataUrl, 400);
+                imageUrl = `data:image/jpeg;base64,${rawBase64}`;
+              }
+            } catch (uploadErr) {
+              console.warn("Erro no processo de upload de arquivo:", uploadErr);
             }
-          } catch (uploadErr) {
-            console.warn("Erro no processo de upload de arquivo:", uploadErr);
-          }
 
-          // OTIMIZAÇÃO CRÍTICA: Remove a imagem base64 do JSON antes de salvar no banco
-          const dbResult = { 
-            ...resultWithImage, 
-            capturedImage: undefined,
-            location: {
-              latitude: validatedLoc.lat,
-              longitude: validatedLoc.lon,
-              address: validatedLoc.address
-            }
-          };
+            // OTIMIZAÇÃO CRÍTICA: Remove a imagem base64 do JSON antes de salvar no banco
+            const dbResult = { 
+              ...resultWithImage, 
+              capturedImage: undefined,
+              location: {
+                latitude: validatedLoc.lat,
+                longitude: validatedLoc.lon,
+                address: validatedLoc.address
+              }
+            };
 
-          console.log("[History] Salvando arquivo no banco...");
-          const { data: insertData, error: insertError } = await supabase.from('pest_detections').insert([{ 
-            user_id: user.id, 
-            image_data: imageUrl || resizedDataUrl, 
-            pest_name: res.pest?.name || 'Scan', 
-            confidence: Number(res.confidence) || 0, 
-            latitude: validatedLoc.lat,
-            longitude: validatedLoc.lon,
-            location_name: validatedLoc.address,
-            analysis_result: dbResult
-          }]).select();
-
-          if (insertError) throw insertError;
-
-          if (insertData && insertData.length > 0) {
-            const newId = insertData[0].id;
-            setCurrentResult(prev => prev ? { ...prev, id: newId } : null);
-          }
-
-          console.log("✅ [History] Arquivo salvo com sucesso!");
-          fetchHistory();
-        } catch (e: any) {
-          console.error("❌ Erro ao salvar histórico de arquivo no Supabase:", e);
-          
-          // SALVAMENTO OFFLINE (QUEUE)
-          if (!navigator.onLine || e.message?.includes("Failed to fetch") || e.message?.includes("network")) {
-            console.log("[Offline] Adicionando arquivo à fila de sincronização...");
-            const offlineItem = {
-              pest_name: res.pest?.name || 'Scan',
-              confidence: Number(res.confidence) || 0,
+            console.log("[History] Salvando arquivo no banco...");
+            const { data: insertData, error: insertError } = await supabase.from('pest_detections').insert([{ 
+              user_id: user.id, 
+              image_data: imageUrl || resizedDataUrl, 
+              pest_name: res.pest?.name || 'Scan', 
+              confidence: Number(res.confidence) || 0, 
               latitude: validatedLoc.lat,
               longitude: validatedLoc.lon,
               location_name: validatedLoc.address,
-              analysis_result: { ...res, location: { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address } },
-              image_data: resizedDataUrl, // Mantém base64 para sincronizar depois
-              timestamp: Date.now()
-            };
+              analysis_result: dbResult
+            }]).select();
+
+            if (insertError) throw insertError;
+
+            if (insertData && insertData.length > 0) {
+              const newId = insertData[0].id;
+              setCurrentResult(prev => prev ? { ...prev, id: newId } : null);
+            }
+
+            console.log("✅ [History] Arquivo salvo com sucesso!");
+            fetchHistory();
+          } catch (e: any) {
+            console.error("❌ Erro ao salvar histórico de arquivo no Supabase:", e);
             
-            const queue = JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]');
-            queue.push(offlineItem);
-            localStorage.setItem('pestscan_offline_queue', JSON.stringify(queue));
-            
-            showToast("Offline: Arquivo salvo localmente e será sincronizado em breve.", "info");
-            
-            // Atualiza o histórico local imediatamente para mostrar no mapa
-            const localEntry = {
-              id: `temp_file_${Date.now()}`,
-              timestamp: offlineItem.timestamp,
-              image: resizedDataUrl,
-              result: offlineItem.analysis_result,
-              location: offlineItem.location_name
-            };
-            setHistory(prev => [localEntry, ...prev]);
-          } else {
-            const errorMsg = e.message || e.details || "Erro de rede ou permissão";
-            showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
+            // SALVAMENTO OFFLINE (QUEUE)
+            if (!navigator.onLine || e.message?.includes("Failed to fetch") || e.message?.includes("network")) {
+              saveToOfflineQueue(res, validatedLoc, resizedDataUrl);
+            } else {
+              const errorMsg = e.message || e.details || "Erro de rede ou permissão";
+              showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
+            }
           }
+        } else {
+          // MODO OFFLINE (Sem login)
+          console.log("[Offline] Modo local sem login. Salvando arquivo apenas localmente.");
+          saveToOfflineQueue(res, validatedLoc, resizedDataUrl);
         }
       }
     } catch (e: any) {
@@ -2557,7 +2576,7 @@ const App: React.FC = () => {
                   </button>
                   <button 
                     onClick={() => {
-                      const shareUrl = `${window.location.origin}?view=map&user=${user?.id || 'public'}`;
+                      const shareUrl = `${window.location.origin}?view=heatmap&userId=${user?.id || 'public'}`;
                       if (navigator.share) {
                         navigator.share({
                           title: 'Mapa de Calor - PestScan Pro',
@@ -2689,7 +2708,16 @@ const App: React.FC = () => {
                             {/* Heatmap simulation with multiple circles */}
                             <Circle 
                               center={[lat, lon]}
-                              radius={400}
+                              radius={150}
+                              pathOptions={{ 
+                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillOpacity: 0.03,
+                                color: 'transparent'
+                              }}
+                            />
+                            <Circle 
+                              center={[lat, lon]}
+                              radius={80}
                               pathOptions={{ 
                                 fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
                                 fillOpacity: 0.05,
@@ -2698,19 +2726,10 @@ const App: React.FC = () => {
                             />
                             <Circle 
                               center={[lat, lon]}
-                              radius={200}
+                              radius={40}
                               pathOptions={{ 
                                 fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
                                 fillOpacity: 0.1,
-                                color: 'transparent'
-                              }}
-                            />
-                            <Circle 
-                              center={[lat, lon]}
-                              radius={100}
-                              pathOptions={{ 
-                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
-                                fillOpacity: 0.2,
                                 color: 'transparent'
                               }}
                             />
