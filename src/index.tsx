@@ -1569,7 +1569,13 @@ const App: React.FC = () => {
         const track = stream.getVideoTracks()[0];
         const caps = (track as any).getCapabilities?.() || {};
         if (caps.torch) setHasFlash(true);
-        if (caps.zoom) setZoomCaps({ min: caps.zoom.min, max: caps.zoom.max });
+        if (caps.zoom) {
+          setZoomCaps({ min: caps.zoom.min, max: caps.zoom.max });
+          const settings = (track as any).getSettings?.() || {};
+          const currentZoom = settings.zoom || caps.zoom.min;
+          setZoomLevel(currentZoom);
+          zoomLevelRef.current = currentZoom;
+        }
       }
     } catch (e: any) { 
       // Se o erro for AbortError, não mostramos erro na UI pois é uma ação esperada de cancelamento
@@ -1611,11 +1617,13 @@ const App: React.FC = () => {
   };
 
   const [zoomLevel, setZoomLevel] = useState(1);
-  const [maxZoom, setMaxZoom] = useState(1);
+  const zoomLevelRef = useRef(1);
+  const isZooming = useRef(false);
   const touchStartDist = useRef<number | null>(null);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 2) {
+      e.preventDefault();
       touchStartDist.current = Math.hypot(
         e.touches[0].pageX - e.touches[1].pageX,
         e.touches[0].pageY - e.touches[1].pageY
@@ -1624,23 +1632,30 @@ const App: React.FC = () => {
   };
 
   const handleTouchMove = async (e: React.TouchEvent) => {
-    if (e.touches.length === 2 && touchStartDist.current && streamRef.current) {
+    if (e.touches.length === 2 && touchStartDist.current && streamRef.current && !isZooming.current) {
+      e.preventDefault();
       const dist = Math.hypot(
         e.touches[0].pageX - e.touches[1].pageX,
         e.touches[0].pageY - e.touches[1].pageY
       );
       const delta = dist / touchStartDist.current;
       const track = streamRef.current.getVideoTracks()[0];
-      const capabilities = track.getCapabilities() as any;
+      const capabilities = (track as any).getCapabilities?.() || {};
       
       if (capabilities.zoom) {
-        const newZoom = Math.min(capabilities.zoom.max, Math.max(capabilities.zoom.min, zoomLevel * delta));
+        const newZoom = Math.min(capabilities.zoom.max, Math.max(capabilities.zoom.min, zoomLevelRef.current * delta));
+        if (Math.abs(newZoom - zoomLevelRef.current) < 0.01) return;
+
+        isZooming.current = true;
         try {
-          await (track as any).applyConstraints({ advanced: [{ zoom: newZoom }] });
+          await (track as any).applyConstraints({ advanced: [{ zoom: newZoom }] } as any);
+          zoomLevelRef.current = newZoom;
           setZoomLevel(newZoom);
           touchStartDist.current = dist;
         } catch (err) {
           console.warn("Zoom error:", err);
+        } finally {
+          isZooming.current = false;
         }
       }
     }
@@ -2569,6 +2584,7 @@ const App: React.FC = () => {
                 className="w-full aspect-[3/4] bg-slate-900 rounded-[4rem] overflow-hidden border-8 border-white shadow-2xl relative"
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
+                style={{ touchAction: 'none' }}
               >
                 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
                 
@@ -2611,6 +2627,12 @@ const App: React.FC = () => {
                       <div className="absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 border-emerald-400 rounded-br-2xl" />
                    </div>
                 </div>
+
+                {zoomCaps && zoomCaps.max > zoomCaps.min && (
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/40 text-white rounded-full text-[10px] font-black z-50">
+                    ZOOM: {zoomLevel.toFixed(1)}x
+                  </div>
+                )}
              </div>
              <p className="mt-10 text-sm font-bold text-slate-400 px-10 text-center leading-relaxed uppercase tracking-widest text-[10px]">
                Posicione a praga no centro do visor
