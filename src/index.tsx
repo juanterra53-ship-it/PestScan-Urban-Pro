@@ -9,7 +9,8 @@ import {
   User, Lock, Mail, LogOut, CheckCircle,
   Database, ShieldCheck, Zap, ZapOff,
   Globe, Cpu, Image as ImageIcon, WifiOff, RefreshCw, Printer, Save, FileText,
-  ChevronDown, ChevronUp, Activity, AlertCircle, Share2, Map as MapIcon, MapPin
+  ChevronDown, ChevronUp, Activity, AlertCircle, Share2, Map as MapIcon, MapPin,
+  Thermometer, Droplets
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, CircleMarker, useMap, FeatureGroup, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
@@ -73,6 +74,32 @@ const MapEvents: React.FC<{ onMoveStart: () => void, onMapClick?: (lat: number, 
       if (onMapClick) onMapClick(e.latlng.lat, e.latlng.lng);
     },
   });
+  return null;
+};
+
+const FitBounds: React.FC<{ points: { latitude: number, longitude: number }[], isCluster?: boolean }> = ({ points, isCluster }) => {
+  const map = useMap();
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      map.invalidateSize();
+      if (points.length > 0) {
+        const validPoints = points.filter(p => isValidCoord(p.latitude) && isValidCoord(p.longitude));
+        if (validPoints.length === 0) return;
+
+        if (validPoints.length === 1) {
+          map.setView([validPoints[0].latitude, validPoints[0].longitude], 17);
+        } else {
+          const bounds = L.latLngBounds(validPoints.map(p => [p.latitude, p.longitude]));
+          if (isCluster) {
+            map.setView(bounds.getCenter(), 17);
+          } else {
+            map.fitBounds(bounds, { padding: [60, 60], maxZoom: 17 });
+          }
+        }
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [points, map, isCluster]);
   return null;
 };
 
@@ -272,6 +299,7 @@ const App: React.FC = () => {
   const [reportArea, setReportArea] = useState('');
   const [reportObservation, setReportObservation] = useState('');
   const [reportMeasures, setReportMeasures] = useState('');
+  const [reportClientName, setReportClientName] = useState('');
   const [modal, setModal] = useState<{
     isOpen: boolean, 
     title: string, 
@@ -298,6 +326,33 @@ const App: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [weather, setWeather] = useState<{ temp: number; humidity: number } | null>(null);
+  const [isFetchingWeather, setIsFetchingWeather] = useState(false);
+
+  const fetchWeather = useCallback(async (lat: number, lon: number) => {
+    if (isFetchingWeather) return;
+    setIsFetchingWeather(true);
+    try {
+      const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m`);
+      const data = await response.json();
+      if (data.current) {
+        setWeather({
+          temp: Math.round(data.current.temperature_2m),
+          humidity: Math.round(data.current.relative_humidity_2m)
+        });
+      }
+    } catch (e) {
+      console.error("Erro ao buscar clima:", e);
+    } finally {
+      setIsFetchingWeather(false);
+    }
+  }, [isFetchingWeather]);
+
+  useEffect(() => {
+    if (view === 'map' && location) {
+      fetchWeather(location.lat, location.lon);
+    }
+  }, [view, location, fetchWeather]);
   const [isModelReady, setIsModelReady] = useState(isLocalModelLoaded());
   const [modelStatus, setModelStatus] = useState(getModelStatus());
   const [normMode, setNormMode] = useState(2);
@@ -316,7 +371,7 @@ const App: React.FC = () => {
     return Object.keys(counts).map(name => ({ name, count: counts[name] })).sort((a, b) => b.count - a.count);
   }, [history]);
 
-  const [mapMode, setMapMode] = useState<'street' | 'satellite'>('street');
+  const [mapMode, setMapMode] = useState<'street' | 'satellite'>('satellite');
   const [activeBatchIndex, setActiveBatchIndex] = useState(0);
 
   // Sincroniza campos do relatório com o resultado atual
@@ -458,7 +513,8 @@ const App: React.FC = () => {
   const signaturePadRef = useRef<SignaturePad | null>(null);
 
   useEffect(() => {
-    if (sigCanvas.current && !signaturePadRef.current) {
+    if (view === 'report-setup' && sigCanvas.current) {
+      // Re-inicializa sempre que entrar na tela de setup para garantir que o canvas esteja correto
       signaturePadRef.current = new SignaturePad(sigCanvas.current, {
         backgroundColor: 'rgba(255, 255, 255, 0)',
         penColor: '#064e3b'
@@ -1095,6 +1151,17 @@ const App: React.FC = () => {
     const { blob, pdf, fileName } = result as any;
     setGeneratedPdfBlob(blob);
     setGeneratedPdfFileName(fileName);
+    
+    // Converte para base64 para uso no modal (links de download/visualização)
+    if (pdf && pdf.output) {
+      try {
+        const dataUri = pdf.output('datauristring');
+        setPdfBase64(dataUri);
+      } catch (e) {
+        console.warn("Erro ao gerar datauristring:", e);
+      }
+    }
+    
     setIsPdfModalOpen(true);
     showToast("Relatório pronto!", "success");
     
@@ -1109,49 +1176,31 @@ const App: React.FC = () => {
   };
 
   const handleShare = async () => {
-    showToast("Preparando para compartilhar...", "info");
+    showToast("Gerando relatório para compartilhar...", "info");
     const result = await generatePDF();
     if (!result) {
       showToast("Erro ao gerar PDF.", "error");
       return;
     }
 
-    const { blob, fileName } = result;
+    const { blob, pdf, fileName } = result as any;
     setGeneratedPdfBlob(blob);
     setGeneratedPdfFileName(fileName);
-    const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
-
-    // Tenta compartilhar diretamente primeiro
-    try {
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-        await navigator.share({
-          title: 'Relatório PestScan Pro',
-          text: `Confira a identificação da praga: ${currentResult?.pest?.name}`,
-          files: [pdfFile]
-        });
-        showToast("Compartilhado com sucesso!", "success");
-      } else {
-        // Se não suportar arquivos, abre o modal de sucesso para download alternativo
-        setGeneratedPdfBlob(blob);
-        setIsPdfModalOpen(true);
+    
+    // Converte para base64 para uso no modal (links de download/visualização)
+    if (pdf && pdf.output) {
+      try {
+        const dataUri = pdf.output('datauristring');
+        setPdfBase64(dataUri);
+      } catch (e) {
+        console.warn("Erro ao gerar datauristring:", e);
       }
-    } catch (err: any) {
-      console.warn("navigator.share falhou:", err);
-      // Fallback para compartilhar apenas texto se o arquivo falhar
-      if (navigator.share) {
-        try {
-          await navigator.share({
-            title: 'Relatório PestScan Pro',
-            text: `Identificação: ${currentResult?.pest?.name}. O PDF foi gerado. Use a opção 'Baixar' no app.`
-          });
-          showToast("Texto compartilhado. Use 'Baixar' para o PDF.", "info");
-        } catch (e) {
-          console.error("Share texto falhou:", e);
-        }
-      }
-      setGeneratedPdfBlob(blob);
-      setIsPdfModalOpen(true);
     }
+    
+    // Abre o modal para que o usuário clique em compartilhar
+    // Isso garante que o navegador reconheça o gesto do usuário (user gesture)
+    setIsPdfModalOpen(true);
+    showToast("Relatório pronto! Clique em 'Compartilhar' no modal.", "success");
   };
 
   const PdfSuccessModal = () => {
@@ -1311,8 +1360,17 @@ const App: React.FC = () => {
   };
 
   const savePestDetails = async () => {
-    if (!currentResult || !currentResult.id) {
+    if (!currentResult) {
       showToast("Nenhum scan selecionado para salvar.", "error");
+      return;
+    }
+
+    const isBatch = !!currentResult.batchResults;
+    const targetItem = isBatch ? currentResult.batchResults![activeBatchIndex] : currentResult;
+    const targetId = targetItem.id;
+
+    if (!targetId) {
+      showToast("Aguarde o registro ser sincronizado...", "info");
       return;
     }
 
@@ -1320,7 +1378,7 @@ const App: React.FC = () => {
     try {
       // Otimização: remove a imagem base64 antes de salvar no JSON do banco
       const dbResult = { 
-        ...currentResult, 
+        ...targetItem, 
         capturedImage: undefined 
       };
 
@@ -1329,13 +1387,13 @@ const App: React.FC = () => {
         .update({ 
           analysis_result: dbResult
         })
-        .eq('id', currentResult.id);
+        .eq('id', targetId);
 
       if (error) throw error;
 
       // Atualiza o histórico local para refletir as mudanças
       setHistory(prev => prev.map(h => 
-        h.id === currentResult.id ? { ...h, result: currentResult } : h
+        h.id === targetId ? { ...h, result: targetItem } : h
       ));
 
       showToast("Informações salvas com sucesso!", "success");
@@ -2554,13 +2612,6 @@ const App: React.FC = () => {
                 <X size={20} className="text-white/80" />
               </button>
             )}
-            <button 
-              onClick={() => setView('privacy')}
-              className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl transition-colors border border-white/10"
-              title="Privacidade"
-            >
-              <ShieldCheck size={20} className="text-white/80" />
-            </button>
           </div>
         </div>
       </header>
@@ -2760,8 +2811,9 @@ const App: React.FC = () => {
         {view === 'map' && (
           <div className="space-y-8 pb-12">
             <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm">
-              <div className="flex items-center gap-4 mb-6">
-                <div className="flex items-center gap-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div className="flex items-center gap-4 min-w-0">
+                <div className="flex items-center gap-2 shrink-0">
                   <button 
                     onClick={() => fetchHistory(true)}
                     className="p-3 bg-slate-50 hover:bg-slate-100 rounded-2xl transition-colors border border-slate-100 text-slate-400"
@@ -2792,17 +2844,33 @@ const App: React.FC = () => {
                     <MapIcon size={24} />
                   </div>
                 </div>
-                <div>
+                
+                <div className="flex flex-col min-w-0">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-emerald-900 font-black text-sm uppercase tracking-tight">Mapa de Calor</h3>
-                    <div className="flex items-center gap-1 bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/20">
+                    <h3 className="text-emerald-900 font-black text-sm uppercase tracking-tight leading-none whitespace-nowrap overflow-hidden text-ellipsis">Mapa de Calor</h3>
+                    <div className="flex items-center gap-1 bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/20 shrink-0">
                       <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
                       <span className="text-[8px] font-black text-red-600 uppercase tracking-tighter">Live</span>
                     </div>
                   </div>
-                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Focos de Infestação em Tempo Real</p>
+                  <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest leading-none mt-1.5 whitespace-nowrap overflow-hidden text-ellipsis">Focos em Tempo Real</p>
                 </div>
               </div>
+
+              {weather && (
+                <div className="flex items-center gap-3 bg-slate-50 px-4 py-2.5 rounded-2xl border border-slate-100 shadow-inner self-start sm:self-center shrink-0">
+                  <div className="flex items-center gap-1.5">
+                    <Thermometer size={14} className="text-orange-500" />
+                    <span className="text-[11px] font-black text-slate-700 leading-none">{weather.temp}°C</span>
+                  </div>
+                  <div className="w-px h-3 bg-slate-200" />
+                  <div className="flex items-center gap-1.5">
+                    <Droplets size={14} className="text-blue-500" />
+                    <span className="text-[11px] font-black text-slate-700 leading-none">{weather.humidity}%</span>
+                  </div>
+                </div>
+              )}
+            </div>
 
                 <div className="w-full h-[400px] rounded-[2.5rem] overflow-hidden border-4 border-slate-50 shadow-inner relative z-10">
                 {/* Manual Refresh Button - Removed extra one for cleaner UI */}
@@ -2830,7 +2898,7 @@ const App: React.FC = () => {
                           ? [history[0].result.location.latitude, history[0].result.location.longitude]
                           : [-23.5505, -46.6333]
                     } 
-                    zoom={13} 
+                    zoom={19} 
                     style={{ height: '100%', width: '100%' }}
                     scrollWheelZoom={true}
                   >
@@ -2871,7 +2939,10 @@ const App: React.FC = () => {
                     ) : (
                       <TileLayer
                         attribution='Map data &copy; Google Satellite 2026'
-                        url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
+                        url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&scale=2"
+                        maxZoom={21}
+                        crossOrigin="anonymous"
+                        detectRetina={true}
                       />
                     )}
                     {(() => {
@@ -3091,10 +3162,11 @@ const App: React.FC = () => {
                       // Usamos o primeiro como base para o relatório, mas passamos todos os selecionados
                       setCurrentResult({ 
                         ...selected[0].result, 
+                        id: selected[0].id,
                         capturedImage: selected[0].image, 
                         timestamp: selected[0].timestamp,
                         // Adicionamos uma propriedade customizada para o relatório em massa
-                        batchResults: selected.map(s => ({ ...s.result, capturedImage: s.image, timestamp: s.timestamp }))
+                        batchResults: selected.map(s => ({ ...s.result, id: s.id, capturedImage: s.image, timestamp: s.timestamp }))
                       } as any);
                       setView('report-setup');
                     }
@@ -3436,6 +3508,19 @@ const App: React.FC = () => {
               </div>
               <div className="space-y-4">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                  <User size={14} /> Nome Completo do Cliente
+                </label>
+                <input 
+                  type="text" 
+                  value={reportClientName}
+                  onChange={(e) => setReportClientName(e.target.value)}
+                  placeholder="Digite o nome completo do cliente..."
+                  className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl text-xs font-bold text-slate-800 placeholder:text-slate-300 focus:border-emerald-500 focus:bg-white transition-all outline-none"
+                />
+              </div>
+
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
                   <Globe size={14} /> Área Afetada (m² ou Hectares)
                 </label>
                 <input 
@@ -3607,17 +3692,22 @@ const App: React.FC = () => {
                   </div>
                   <div>
                     <h2 className="text-xl font-black uppercase tracking-tighter" style={{ color: '#ffffff' }}>{currentResult.batchResults ? 'Relatório Consolidado de Inspeção' : 'Certificado de Inspeção'}</h2>
-                    <p className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: '#34d399' }}>PestScan Pro • Digital Report</p>
+                    <p className="text-[12px] font-black uppercase tracking-[0.2em]" style={{ color: '#34d399' }}>PestScan Pro • Digital Report</p>
+                    {reportClientName && (
+                      <p className="text-[10px] font-black uppercase tracking-widest mt-2" style={{ color: '#ffffff' }}>
+                        Cliente: <span className="text-emerald-400">{reportClientName}</span>
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex justify-between items-end">
                   <div>
-                    <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)' }}>ID do Relatório</p>
-                    <p className="text-xs font-mono font-bold" style={{ color: '#ffffff' }}>#PS-{Math.random().toString(36).substr(2, 9).toUpperCase()}</p>
+                    <p className="text-[11px] font-black uppercase tracking-widest mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)' }}>ID do Relatório</p>
+                    <p className="text-sm font-mono font-bold" style={{ color: '#ffffff' }}>#PS-{Math.random().toString(36).substr(2, 9).toUpperCase()}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)' }}>Data de Emissão</p>
-                    <p className="text-xs font-bold" style={{ color: '#ffffff' }}>{new Date().toLocaleDateString('pt-BR')} - {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
+                    <p className="text-[11px] font-black uppercase tracking-widest mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)' }}>Data de Emissão</p>
+                    <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{new Date().toLocaleDateString('pt-BR')} - {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
                   </div>
                 </div>
               </div>
@@ -3630,7 +3720,7 @@ const App: React.FC = () => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     {/* Mapa de Calor / Localização Geral */}
                     <div className="space-y-4">
-                      <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                      <h3 className="text-[12px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
                         <Globe size={14} /> Mapa de Ocorrências (Heatmap)
                       </h3>
                       <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner relative group" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
@@ -3638,46 +3728,74 @@ const App: React.FC = () => {
                           <>
                             {(() => {
                               const validPoints = reportEntries.filter(e => e.location && isValidCoord(e.location.latitude));
-                              const center = validPoints[0].location!;
-                              const pointsStr = validPoints.map(p => `${p.location!.longitude},${p.location!.latitude},pm2rdm`).join('~');
+                              if (validPoints.length === 0) return null;
+                              
+                              // Lógica Sênior: Ajuste dinâmico de enquadramento
+                              const lats = validPoints.map(p => p.location!.latitude);
+                              const lons = validPoints.map(p => p.location!.longitude);
+                              const minLat = Math.min(...lats);
+                              const maxLat = Math.max(...lats);
+                              const minLon = Math.min(...lons);
+                              const maxLon = Math.max(...lons);
+                              
+                              const avgLat = lats.reduce((a, b) => a + b, 0) / lats.length;
+                              const avgLon = lons.reduce((a, b) => a + b, 0) / lons.length;
+                              
+                              // Verifica se os pontos estão muito dispersos (mais de ~200m)
+                              const isCluster = (maxLat - minLat) < 0.002 && (maxLon - minLon) < 0.002;
+                              
+                              const pointsStr = validPoints.slice(0, 20).map(p => `${p.location!.longitude},${p.location!.latitude},pm2rdm`).join('~');
+                              
+                              // Usamos o Leaflet diretamente no relatório com tiles do Google Satellite
+                              // Isso garante que a planta (fábrica) apareça com a mesma qualidade do mapa principal.
+                              const points = validPoints.map(p => ({
+                                latitude: p.location!.latitude,
+                                longitude: p.location!.longitude
+                              }));
+
                               return (
-                                <img 
-                                  src={`https://static-maps.yandex.ru/1.x/?lang=pt_BR&ll=${center.longitude},${center.latitude}&z=14&l=map&pt=${pointsStr}`}
-                                  alt="Mapa Geral"
-                                  className="w-full h-full object-cover"
-                                  onError={(e) => {
-                                    (e.target as HTMLImageElement).src = `https://picsum.photos/seed/map-consolidated/800/450`;
-                                  }}
-                                />
+                                <div className="w-full h-full">
+                                  <MapContainer 
+                                    key={`report-map-${points.length}-${points[0]?.latitude || 0}`}
+                                    center={[avgLat, avgLon]}
+                                    zoom={isCluster ? 17 : 15}
+                                    style={{ height: '100%', width: '100%' }}
+                                    zoomControl={true}
+                                    dragging={true}
+                                    scrollWheelZoom={true}
+                                    doubleClickZoom={true}
+                                    touchZoom={true}
+                                    attributionControl={false}
+                                  >
+                                    <TileLayer
+                                      url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&scale=2"
+                                      crossOrigin="anonymous"
+                                      maxZoom={21}
+                                      detectRetina={true}
+                                    />
+                                    <FitBounds points={points} isCluster={isCluster} />
+                                    {validPoints.map((p, idx) => (
+                                      <CircleMarker 
+                                        key={idx}
+                                        center={[p.location!.latitude, p.location!.longitude]}
+                                        radius={8}
+                                        pathOptions={{ 
+                                          fillColor: '#ef4444', 
+                                          color: '#ffffff', 
+                                          weight: 3, 
+                                          fillOpacity: 1 
+                                        }}
+                                      />
+                                    ))}
+                                  </MapContainer>
+                                </div>
                               );
                             })()}
-                            {/* Simulação de Heatmap em Massa */}
-                            <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                              {reportEntries.slice(0, 8).map((_, i) => (
-                                <div 
-                                  key={i}
-                                  className="absolute rounded-full blur-3xl animate-pulse" 
-                                  style={{ 
-                                    backgroundColor: i % 2 === 0 ? 'rgba(239, 68, 68, 0.25)' : 'rgba(249, 115, 22, 0.2)',
-                                    width: `${100 + Math.random() * 100}px`,
-                                    height: `${100 + Math.random() * 100}px`,
-                                    top: `${15 + Math.random() * 70}%`,
-                                    left: `${15 + Math.random() * 70}%`,
-                                    animationDelay: `${i * 0.4}s`,
-                                    animationDuration: `${3 + Math.random() * 2}s`
-                                  }} 
-                                />
-                              ))}
-                            </div>
-                            <div className="absolute bottom-4 left-4 backdrop-blur-md px-3 py-1.5 rounded-full border shadow-sm flex items-center gap-2" style={{ backgroundColor: 'rgba(255, 255, 255, 0.9)', borderColor: '#e2e8f0' }}>
-                              <div className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: '#ef4444' }} />
-                              <span className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#475569' }}>{reportEntries.length} Focos Identificados</span>
-                            </div>
                           </>
                         ) : (
                           <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center" style={{ backgroundColor: '#f8fafc' }}>
                             <Globe size={32} style={{ color: '#e2e8f0' }} className="mb-2" />
-                            <p className="text-[10px] font-black uppercase tracking-widest leading-tight" style={{ color: '#94a3b8' }}>Localização não disponível</p>
+                            <p className="text-[12px] font-black uppercase tracking-widest leading-tight" style={{ color: '#94a3b8' }}>Localização não disponível</p>
                           </div>
                         )}
                       </div>
@@ -3685,9 +3803,15 @@ const App: React.FC = () => {
 
                     {/* Gráfico de Distribuição */}
                     <div className="space-y-4">
-                      <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                        <Activity size={14} /> Distribuição por Espécie
-                      </h3>
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-[12px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                          <Activity size={14} /> Distribuição por Espécie
+                        </h3>
+                        <div className="px-4 py-1.5 rounded-full border shadow-sm flex items-center gap-2 bg-white" style={{ borderColor: '#e2e8f0' }}>
+                          <div className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: '#ef4444' }} />
+                          <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#475569' }}>{reportEntries.length} Focos Identificados</span>
+                        </div>
+                      </div>
                       <div className="aspect-video w-full bg-slate-50 rounded-[2rem] p-6 border border-slate-100">
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={reportChartData}>
@@ -3710,19 +3834,19 @@ const App: React.FC = () => {
 
                   {/* Medidas Preventivas Sugeridas (Consolidado) */}
                   <div className="space-y-4">
-                    <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                    <h3 className="text-[12px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
                       <ShieldCheck size={14} /> Medidas Preventivas Recomendadas
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {(() => {
                         const allMeasures = Array.from(new Set(reportEntries.flatMap(e => e.pest?.controlMethods || []))).slice(0, 6);
-                        if (allMeasures.length === 0) return <p className="text-[10px] font-bold text-slate-400 italic">Nenhuma recomendação específica disponível.</p>;
+                        if (allMeasures.length === 0) return <p className="text-[12px] font-bold text-slate-400 italic">Nenhuma recomendação específica disponível.</p>;
                         return allMeasures.map((measure, i) => (
                           <div key={i} className="flex items-start gap-3 p-4 rounded-2xl bg-emerald-50/30 border border-emerald-100/50">
                             <div className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 mt-0.5">
                               <CheckCircle size={10} />
                             </div>
-                            <p className="text-[10px] font-bold text-emerald-900 leading-tight">{measure}</p>
+                            <p className="text-[12px] font-bold text-emerald-900 leading-tight">{measure}</p>
                           </div>
                         ));
                       })()}
@@ -3740,7 +3864,7 @@ const App: React.FC = () => {
                     <div key={entry.id || index} className="space-y-8 pb-16 border-b border-slate-50 last:border-0 last:pb-0">
                       <div className="flex items-center justify-between gap-4">
                         <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-black">
+                          <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-[12px] font-black">
                             {String(index + 1).padStart(2, '0')}
                           </div>
                           <h4 className="text-sm font-black uppercase tracking-tight" style={{ color: '#1e293b' }}>
@@ -3748,10 +3872,10 @@ const App: React.FC = () => {
                           </h4>
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest" style={{ backgroundColor: '#f1f5f9', color: '#64748b' }}>
+                          <div className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest" style={{ backgroundColor: '#f1f5f9', color: '#64748b' }}>
                             Confiança: {(entry.confidence * 100).toFixed(1)}%
                           </div>
-                          <div className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest ${
+                          <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
                             entry.pest?.riskLevel === 'Crítico' || entry.pest?.riskLevel === 'Alto' ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'
                           }`}>
                             Risco: {entry.pest?.riskLevel || 'Moderado'}
@@ -3763,7 +3887,7 @@ const App: React.FC = () => {
                         <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-8">
                           {/* Imagem */}
                           <div className="space-y-3">
-                            <p className="text-[8px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Evidência Fotográfica</p>
+                            <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Evidência Fotográfica</p>
                             <div className="w-full aspect-square rounded-3xl overflow-hidden border-2 border-slate-50 shadow-sm relative group">
                               <img 
                                 src={entry.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
@@ -3777,17 +3901,17 @@ const App: React.FC = () => {
                           <div className="space-y-4 flex flex-col justify-center">
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                               <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                                <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
-                                <p className="text-[12px] font-bold" style={{ color: '#1e293b' }}>{entry.area || 'Não informado'}</p>
+                                <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
+                                <p className="text-[14px] font-bold" style={{ color: '#1e293b' }}>{entry.area || 'Não informado'}</p>
                               </div>
                               <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                                <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Localização</p>
-                                <p className="text-[11px] font-bold" style={{ color: '#1e293b' }}>{entry.location?.address || 'GPS indisponível'}</p>
+                                <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Localização</p>
+                                <p className="text-[13px] font-bold" style={{ color: '#1e293b' }}>{entry.location?.address || 'GPS indisponível'}</p>
                               </div>
                             </div>
                             <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                              <p className="text-[7px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Coordenadas GPS</p>
-                              <p className="text-[10px] font-mono font-bold" style={{ color: '#64748b' }}>
+                              <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Coordenadas GPS</p>
+                              <p className="text-[12px] font-mono font-bold" style={{ color: '#64748b' }}>
                                 {entry.location?.latitude ? `${entry.location.latitude.toFixed(6)}, ${entry.location.longitude.toFixed(6)}` : 'N/A'}
                               </p>
                             </div>
@@ -3796,23 +3920,36 @@ const App: React.FC = () => {
 
                         {/* Descrições Detalhadas - Agora em largura total para máxima visibilidade */}
                         <div className="space-y-6">
+                          {entry.pest && (
+                            <div className="space-y-2">
+                              <p className="text-[11px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                                <Info size={12} /> Características e Hábitos da Espécie
+                              </p>
+                              <div className="p-6 rounded-3xl border border-emerald-100/50" style={{ backgroundColor: '#f0fdf4' }}>
+                                <p className="text-[14px] font-medium leading-relaxed italic" style={{ color: '#065f46' }}>
+                                  {entry.pest.habits || entry.pest.description || 'Descrição técnica não disponível para esta espécie.'}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          
                           <div className="space-y-2">
-                            <p className="text-[9px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                            <p className="text-[11px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
                               <Activity size={12} /> Medidas Realizadas e Ações Corretivas
                             </p>
                             <div className="p-6 rounded-3xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                              <p className="text-[13px] font-medium leading-relaxed" style={{ color: '#334155' }}>
+                              <p className="text-[14px] font-medium leading-relaxed" style={{ color: '#334155' }}>
                                 {entry.measures || 'Nenhuma medida registrada.'}
                               </p>
                             </div>
                           </div>
                           
                           <div className="space-y-2">
-                            <p className="text-[9px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                            <p className="text-[11px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
                               <Info size={12} /> Observações Adicionais do Técnico
                             </p>
                             <div className="p-6 rounded-3xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                              <p className="text-[13px] font-medium leading-relaxed whitespace-pre-wrap" style={{ color: '#334155' }}>
+                              <p className="text-[14px] font-medium leading-relaxed whitespace-pre-wrap" style={{ color: '#334155' }}>
                                 {entry.observations || 'Sem observações adicionais.'}
                               </p>
                             </div>
@@ -3828,14 +3965,14 @@ const App: React.FC = () => {
                 {/* Dados Técnicos e Assinatura */}
                 <div className="mt-12 pt-12 border-t border-slate-100 grid grid-cols-2 gap-8" style={{ borderColor: '#f1f5f9' }}>
                   <div className="space-y-4">
-                    <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                    <h3 className="text-[12px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
                       <User size={14} /> Responsável Técnico
                     </h3>
                     <div className="space-y-1">
                       <p className="text-sm font-black text-slate-900">Juan Nicolas Terra</p>
-                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Técnico em Agropecuária</p>
-                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Conselho CFTA</p>
-                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Registro Nº 40222945826</p>
+                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Técnico em Agropecuária</p>
+                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Conselho CFTA</p>
+                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Registro Nº 40222945826</p>
                     </div>
                   </div>
                   <div className="flex flex-col items-center justify-end">
@@ -3845,10 +3982,10 @@ const App: React.FC = () => {
                       </div>
                     ) : (
                       <div className="w-48 h-20 border-b-2 border-slate-200 flex items-center justify-center">
-                        <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Assinatura Digital</p>
+                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Assinatura Digital</p>
                       </div>
                     )}
-                    <p className="mt-2 text-[8px] font-black text-slate-400 uppercase tracking-widest">Assinatura do Técnico</p>
+                    <p className="mt-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">Assinatura do Técnico</p>
                   </div>
                 </div>
 
@@ -3856,7 +3993,7 @@ const App: React.FC = () => {
                   <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-4 shadow-lg" style={{ backgroundColor: '#0f172a' }}>
                     <Bug size={24} className="text-emerald-400" />
                   </div>
-                  <p className="text-[8px] font-black uppercase tracking-[0.3em]" style={{ color: '#0f172a' }}>PestScan Pro AI • Certificado Digital</p>
+                  <p className="text-[10px] font-black uppercase tracking-[0.3em]" style={{ color: '#0f172a' }}>PestScan Pro AI • Certificado Digital</p>
                 </div>
               </div>
             </div>
