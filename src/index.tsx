@@ -681,7 +681,8 @@ const App: React.FC = () => {
           fetchHistory();
           // Only show toast if it's not the current user's detection to avoid double notification
           if (payload.new.user_id !== user.id) {
-            showToast(`Nova praga detectada: ${payload.new.pest_name}`, "info");
+            const pestName = payload.new.analysis_result?.pest?.name || payload.new.pest_name || 'Scan';
+            showToast(`Nova praga detectada: ${pestName}`, "info");
           }
         }
       )
@@ -749,7 +750,7 @@ const App: React.FC = () => {
       console.log(`[History] Buscando registros para: ${targetId}`);
       let query = supabase
         .from('pest_detections')
-        .select('*')
+        .select('id, user_id, image_data, analysis_result, created_at')
         .order('created_at', { ascending: false })
         .limit(100);
 
@@ -884,10 +885,16 @@ const App: React.FC = () => {
         const { error: insertError } = await supabase.from('pest_detections').insert([{ 
           user_id: user.id, 
           image_data: imageUrl, 
-          pest_name: item.pest_name, 
-          confidence: item.confidence, 
-          location_name: item.location_name,
-          analysis_result: item.analysis_result,
+          analysis_result: item.analysis_result || {
+            pestFound: true,
+            pest_name: item.pest_name,
+            confidence: item.confidence,
+            location: {
+              latitude: item.latitude,
+              longitude: item.longitude,
+              address: item.location_name
+            }
+          },
           created_at: new Date(item.timestamp).toISOString()
         }]);
 
@@ -1320,8 +1327,7 @@ const App: React.FC = () => {
       const { error } = await supabase
         .from('pest_detections')
         .update({ 
-          analysis_result: dbResult,
-          pest_name: currentResult.pest?.name || 'Scan'
+          analysis_result: dbResult
         })
         .eq('id', currentResult.id);
 
@@ -1708,39 +1714,7 @@ const App: React.FC = () => {
       const localRes = results.sort((a, b) => b.confidence - a.confidence)[0];
       setNormMode(localRes.normalizationMode || 0);
       
-      if (localRes.pestFound && localRes.confidence > 0.75 && localRes.pest) {
-        console.log(`[History] Buscando referência no banco para: ${localRes.pest.name}`);
-        const { data: existingData } = await supabase
-          .from('pest_detections')
-          .select('analysis_result')
-          .ilike('pest_name', `%${localRes.pest.name}%`)
-          .not('analysis_result', 'is', null)
-          .order('confidence', { ascending: false })
-          .limit(1);
-
-        if (existingData && existingData.length > 0) {
-          const cachedResult = typeof existingData[0].analysis_result === 'string' 
-            ? JSON.parse(existingData[0].analysis_result) 
-            : existingData[0].analysis_result;
-
-          if (cachedResult && cachedResult.pestFound) {
-            console.log("✅ [History] Usando ficha técnica do banco de dados.");
-            res = {
-              ...cachedResult,
-              confidence: localRes.confidence,
-              message: `Identificado via Referência Local (${localRes.pest.name})`,
-              source: 'Banco de Dados',
-              capturedImage: undefined // Será preenchido depois
-            };
-          } else {
-            res = await analyzePestImage(base64, canvas, normMode);
-          }
-        } else {
-          res = await analyzePestImage(base64, canvas, normMode);
-        }
-      } else {
-        res = await analyzePestImage(base64, canvas, normMode);
-      }
+      res = await analyzePestImage(base64, canvas, normMode);
 
       const isConnectionError = res.message?.includes("Erro de Conexão") || res.message?.includes("Failed to fetch");
       if ((isConnectionError || (!res.pestFound && localRes.confidence > 0.85)) && localRes.pestFound) {
@@ -1808,11 +1782,8 @@ const App: React.FC = () => {
             const { data: insertData, error: insertError } = await supabase.from('pest_detections').insert([{ 
               user_id: user.id, 
               image_data: imageUrl || dataUrl, 
-              pest_name: res.pest?.name || 'Scan', 
-              confidence: Number(res.confidence) || 0, 
-              location_name: validatedLoc.address,
               analysis_result: dbResult
-            }]).select();
+            }]).select('id');
 
             if (insertError) throw insertError;
 
@@ -1926,37 +1897,6 @@ const App: React.FC = () => {
       imgElement.src = '';
       URL.revokeObjectURL(objectUrl);
 
-      // --- LÓGICA DE ECONOMIA DE API PARA UPLOAD ---
-      if (res.pestFound && res.pest) {
-        console.log(`[History] Buscando referência no banco para: ${res.pest.name}`);
-        const { data: existingData } = await supabase
-          .from('pest_detections')
-          .select('analysis_result')
-          .ilike('pest_name', `%${res.pest.name}%`)
-          .not('analysis_result', 'is', null)
-          .order('confidence', { ascending: false })
-          .limit(1);
-
-        if (existingData && existingData.length > 0) {
-          const cachedResult = typeof existingData[0].analysis_result === 'string' 
-            ? JSON.parse(existingData[0].analysis_result) 
-            : existingData[0].analysis_result;
-
-          if (cachedResult && cachedResult.pestFound) {
-            console.log("✅ [History] Usando ficha técnica do banco de dados.");
-            const currentLocation = res.location;
-            res = {
-              ...cachedResult,
-              confidence: res.confidence,
-              location: currentLocation,
-              message: "Ficha técnica otimizada (Cache)",
-              source: 'Banco de Dados',
-              capturedImage: undefined
-            };
-          }
-        }
-      }
-
       const resultWithImage = { ...res, capturedImage: resizedDataUrl };
       
       setCurrentResult(resultWithImage);
@@ -2005,11 +1945,8 @@ const App: React.FC = () => {
             const { data: insertData, error: insertError } = await supabase.from('pest_detections').insert([{ 
               user_id: user.id, 
               image_data: imageUrl || resizedDataUrl, 
-              pest_name: res.pest?.name || 'Scan', 
-              confidence: Number(res.confidence) || 0, 
-              location_name: validatedLoc.address,
               analysis_result: dbResult
-            }]).select();
+            }]).select('id');
 
             if (insertError) throw insertError;
 
@@ -2055,22 +1992,7 @@ const App: React.FC = () => {
     const startTime = Date.now();
     setLoading(true); setError(null);
     try {
-      // 1. Tenta buscar no banco primeiro (Economia de API)
-      const { data: existingData } = await supabase
-        .from('pest_detections')
-        .select('analysis_result')
-        .ilike('pest_name', `%${searchTerm}%`)
-        .not('analysis_result', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      if (existingData && existingData.length > 0 && existingData[0].analysis_result.pest) {
-        setSelectedPest(existingData[0].analysis_result.pest);
-        setView('detail');
-        return;
-      }
-
-      // 2. Se não tem no banco, chama a IA
+      // Chama a IA diretamente (Removido busca no banco para evitar erros de schema)
       const res = await analyzePestByName(searchTerm);
       if (res.pest) {
         setSelectedPest(res.pest);
@@ -2698,13 +2620,13 @@ const App: React.FC = () => {
 
                         return (
                           <React.Fragment key={entry.id}>
-                            {/* Heatmap simulation with multiple circles - even more subtle */}
+                            {/* Heatmap simulation with multiple circles - extremely subtle */}
                             <Circle 
                               center={[lat, lon]}
                               radius={120}
                               pathOptions={{ 
                                 fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
-                                fillOpacity: 0.02,
+                                fillOpacity: 0.01,
                                 color: 'transparent'
                               }}
                             />
@@ -2713,7 +2635,7 @@ const App: React.FC = () => {
                               radius={60}
                               pathOptions={{ 
                                 fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
-                                fillOpacity: 0.03,
+                                fillOpacity: 0.015,
                                 color: 'transparent'
                               }}
                             />
@@ -2722,7 +2644,7 @@ const App: React.FC = () => {
                               radius={30}
                               pathOptions={{ 
                                 fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
-                                fillOpacity: 0.05,
+                                fillOpacity: 0.02,
                                 color: 'transparent'
                               }}
                             />
