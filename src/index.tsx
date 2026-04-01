@@ -697,13 +697,13 @@ const App: React.FC = () => {
     return L.divIcon({
       className: 'custom-pest-marker',
       html: `
-        <div style="position: relative; width: 24px; height: 24px;">
-          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 10px; height: 10px; background-color: #ef4444; border: 1.5px solid white; border-radius: 50%; box-shadow: 0 0 5px rgba(239, 68, 68, 0.3); z-index: 2;"></div>
-          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 10px; height: 10px; background-color: #ef4444; border-radius: 50%; opacity: 0.4; animation: pulse 3s infinite; z-index: 1;"></div>
+        <div style="position: relative; width: 32px; height: 32px;">
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background-color: #ef4444; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 8px rgba(239, 68, 68, 0.5); z-index: 2;"></div>
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 24px; height: 24px; background-color: #ef4444; border-radius: 50%; opacity: 0.2; animation: pulse 2s infinite; z-index: 1;"></div>
         </div>
       `,
-      iconSize: [24, 24],
-      iconAnchor: [12, 12]
+      iconSize: [32, 32],
+      iconAnchor: [16, 16]
     });
   }, []);
 
@@ -886,8 +886,6 @@ const App: React.FC = () => {
           image_data: imageUrl, 
           pest_name: item.pest_name, 
           confidence: item.confidence, 
-          latitude: item.latitude,
-          longitude: item.longitude,
           location_name: item.location_name,
           analysis_result: item.analysis_result,
           created_at: new Date(item.timestamp).toISOString()
@@ -1812,8 +1810,6 @@ const App: React.FC = () => {
               image_data: imageUrl || dataUrl, 
               pest_name: res.pest?.name || 'Scan', 
               confidence: Number(res.confidence) || 0, 
-              latitude: validatedLoc.lat,
-              longitude: validatedLoc.lon,
               location_name: validatedLoc.address,
               analysis_result: dbResult
             }]).select();
@@ -2011,8 +2007,6 @@ const App: React.FC = () => {
               image_data: imageUrl || resizedDataUrl, 
               pest_name: res.pest?.name || 'Scan', 
               confidence: Number(res.confidence) || 0, 
-              latitude: validatedLoc.lat,
-              longitude: validatedLoc.lon,
               location_name: validatedLoc.address,
               analysis_result: dbResult
             }]).select();
@@ -2680,12 +2674,11 @@ const App: React.FC = () => {
                       />
                     )}
                     {(() => {
-                      const points = history.filter(h => 
-                        h.result && 
-                        h.result.location && 
-                        isValidCoord(h.result.location.latitude) && 
-                        isValidCoord(h.result.location.longitude)
-                      );
+                      const points = history.filter(h => {
+                        const lat = h.result?.location?.latitude;
+                        const lon = h.result?.location?.longitude;
+                        return isValidCoord(lat) && isValidCoord(lon);
+                      });
                       
                       if (points.length === 0) {
                         console.log("[Map] Nenhum ponto válido para renderizar no histórico.");
@@ -2697,7 +2690,7 @@ const App: React.FC = () => {
                       return points.map(entry => {
                         const lat = entry.result?.location?.latitude || 0;
                         const lon = entry.result?.location?.longitude || 0;
-                        const address = entry.location || "Localização Desconhecida";
+                        const address = entry.location || entry.result?.location?.address || "Localização Desconhecida";
                         const confidence = typeof entry.result?.confidence === 'number' ? entry.result.confidence : 0;
                         const pestName = entry.result?.pest?.name || 'Scan';
                         
@@ -2705,10 +2698,19 @@ const App: React.FC = () => {
 
                         return (
                           <React.Fragment key={entry.id}>
-                            {/* Heatmap simulation with multiple circles */}
+                            {/* Heatmap simulation with multiple circles - even more subtle */}
                             <Circle 
                               center={[lat, lon]}
-                              radius={150}
+                              radius={120}
+                              pathOptions={{ 
+                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillOpacity: 0.02,
+                                color: 'transparent'
+                              }}
+                            />
+                            <Circle 
+                              center={[lat, lon]}
+                              radius={60}
                               pathOptions={{ 
                                 fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
                                 fillOpacity: 0.03,
@@ -2717,19 +2719,10 @@ const App: React.FC = () => {
                             />
                             <Circle 
                               center={[lat, lon]}
-                              radius={80}
+                              radius={30}
                               pathOptions={{ 
                                 fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
                                 fillOpacity: 0.05,
-                                color: 'transparent'
-                              }}
-                            />
-                            <Circle 
-                              center={[lat, lon]}
-                              radius={40}
-                              pathOptions={{ 
-                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
-                                fillOpacity: 0.1,
                                 color: 'transparent'
                               }}
                             />
