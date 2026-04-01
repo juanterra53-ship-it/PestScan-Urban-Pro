@@ -1569,12 +1569,21 @@ const App: React.FC = () => {
         const track = stream.getVideoTracks()[0];
         const caps = (track as any).getCapabilities?.() || {};
         if (caps.torch) setHasFlash(true);
+        
+        // Suporte Híbrido: Se não houver zoom de hardware, habilitamos zoom digital (1x a 5x)
         if (caps.zoom) {
+          isHardwareZoom.current = true;
           setZoomCaps({ min: caps.zoom.min, max: caps.zoom.max });
           const settings = (track as any).getSettings?.() || {};
           const currentZoom = settings.zoom || caps.zoom.min;
           setZoomLevel(currentZoom);
           zoomLevelRef.current = currentZoom;
+        } else {
+          isHardwareZoom.current = false;
+          console.log("[Camera] Zoom de hardware não detectado. Habilitando Zoom Digital.");
+          setZoomCaps({ min: 1, max: 5 });
+          setZoomLevel(1);
+          zoomLevelRef.current = 1;
         }
       }
     } catch (e: any) { 
@@ -1603,6 +1612,70 @@ const App: React.FC = () => {
     return () => stopCamera();
   }, [view, initCamera]);
 
+  // Zoom logic refinement for Android WebView
+  useEffect(() => {
+    const container = videoContainerRef.current;
+    if (!container) return;
+
+    const onTouchStartNative = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        zoomStartLevel.current = zoomLevelRef.current;
+        touchStartDist.current = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+      }
+    };
+
+    const onTouchMoveNative = (e: TouchEvent) => {
+      if (e.touches.length === 2 && touchStartDist.current && streamRef.current) {
+        e.preventDefault();
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        
+        const delta = dist / touchStartDist.current;
+        const track = streamRef.current.getVideoTracks()[0];
+        const capabilities = (track as any).getCapabilities?.() || {};
+        
+        const min = capabilities.zoom?.min || 1;
+        const max = capabilities.zoom?.max || 5;
+        
+        const newZoom = Math.min(max, Math.max(min, zoomStartLevel.current * delta));
+        if (Math.abs(newZoom - zoomLevelRef.current) < 0.01) return;
+
+        zoomLevelRef.current = newZoom;
+        setZoomLevel(newZoom);
+
+        if (videoRef.current && !isHardwareZoom.current) {
+          videoRef.current.style.transform = `scale(${newZoom})`;
+        }
+
+        if (isHardwareZoom.current && !isZooming.current) {
+          isZooming.current = true;
+          (track as any).applyConstraints({ advanced: [{ zoom: newZoom }] } as any)
+            .finally(() => { isZooming.current = false; });
+        }
+      }
+    };
+
+    const onTouchEndNative = () => {
+      touchStartDist.current = null;
+    };
+
+    container.addEventListener('touchstart', onTouchStartNative, { passive: false });
+    container.addEventListener('touchmove', onTouchMoveNative, { passive: false });
+    container.addEventListener('touchend', onTouchEndNative);
+
+    return () => {
+      container.removeEventListener('touchstart', onTouchStartNative);
+      container.removeEventListener('touchmove', onTouchMoveNative);
+      container.removeEventListener('touchend', onTouchEndNative);
+    };
+  }, [view]);
+
   const toggleFlash = async () => {
     if (streamRef.current && hasFlash) {
       const track = streamRef.current.getVideoTracks()[0];
@@ -1619,42 +1692,61 @@ const App: React.FC = () => {
   const [zoomLevel, setZoomLevel] = useState(1);
   const zoomLevelRef = useRef(1);
   const isZooming = useRef(false);
+  const isHardwareZoom = useRef(false);
+  const zoomStartLevel = useRef(1);
   const touchStartDist = useRef<number | null>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 2) {
-      e.preventDefault();
+      zoomStartLevel.current = zoomLevelRef.current;
       touchStartDist.current = Math.hypot(
-        e.touches[0].pageX - e.touches[1].pageX,
-        e.touches[0].pageY - e.touches[1].pageY
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
       );
     }
   };
 
+  const handleTouchEnd = () => {
+    touchStartDist.current = null;
+  };
+
   const handleTouchMove = async (e: React.TouchEvent) => {
-    if (e.touches.length === 2 && touchStartDist.current && streamRef.current && !isZooming.current) {
-      e.preventDefault();
+    if (e.touches.length === 2 && touchStartDist.current && streamRef.current) {
       const dist = Math.hypot(
-        e.touches[0].pageX - e.touches[1].pageX,
-        e.touches[0].pageY - e.touches[1].pageY
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
       );
+      
       const delta = dist / touchStartDist.current;
       const track = streamRef.current.getVideoTracks()[0];
       const capabilities = (track as any).getCapabilities?.() || {};
       
-      if (capabilities.zoom) {
-        const newZoom = Math.min(capabilities.zoom.max, Math.max(capabilities.zoom.min, zoomLevelRef.current * delta));
-        if (Math.abs(newZoom - zoomLevelRef.current) < 0.01) return;
+      const min = capabilities.zoom?.min || 1;
+      const max = capabilities.zoom?.max || 5;
+      
+      // Zoom linear baseado no início do gesto
+      const newZoom = Math.min(max, Math.max(min, zoomStartLevel.current * delta));
+      
+      if (Math.abs(newZoom - zoomLevelRef.current) < 0.01) return;
 
+      // Atualiza refs e estado
+      zoomLevelRef.current = newZoom;
+      setZoomLevel(newZoom);
+
+      // Aplica zoom digital via CSS (Performance)
+      if (videoRef.current && !isHardwareZoom.current) {
+        videoRef.current.style.transform = `scale(${newZoom})`;
+      }
+
+      // Tenta aplicar no Hardware se disponível
+      if (isHardwareZoom.current && !isZooming.current) {
         isZooming.current = true;
         try {
-          await (track as any).applyConstraints({ advanced: [{ zoom: newZoom }] } as any);
-          zoomLevelRef.current = newZoom;
-          setZoomLevel(newZoom);
-          touchStartDist.current = dist;
+          (track as any).applyConstraints({ advanced: [{ zoom: newZoom }] } as any)
+            .finally(() => { isZooming.current = false; });
         } catch (err) {
-          console.warn("Zoom error:", err);
-        } finally {
+          console.warn("Hardware Zoom error:", err);
           isZooming.current = false;
         }
       }
@@ -1752,7 +1844,17 @@ const App: React.FC = () => {
       canvas.width = videoRef.current.videoWidth;
       canvas.height = videoRef.current.videoHeight;
       const ctx = canvas.getContext('2d');
-      ctx?.drawImage(videoRef.current, 0, 0);
+      
+      // Se houver zoom digital, precisamos cropar o canvas para o que o usuário vê
+      if (zoomLevel > 1 && !isHardwareZoom.current) {
+        const sw = canvas.width / zoomLevel;
+        const sh = canvas.height / zoomLevel;
+        const sx = (canvas.width - sw) / 2;
+        const sy = (canvas.height - sh) / 2;
+        ctx?.drawImage(videoRef.current, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      } else {
+        ctx?.drawImage(videoRef.current, 0, 0);
+      }
       
       stopCamera();
       
@@ -1781,13 +1883,17 @@ const App: React.FC = () => {
       
       // --- ECONOMIA DE API (BUSCA NO BANCO) ---
       if (localRes.pestFound && localRes.confidence > 0.60 && localRes.pest) {
-        console.log(`[History] Buscando referência no banco para: ${localRes.pest.name}`);
-        const { data: existingData } = await supabase
+        console.log(`[Economy] Buscando referência no banco para: ${localRes.pest.name}`);
+        
+        // Busca otimizada: tenta encontrar qualquer registro que contenha o nome da praga no JSONB
+        const { data: existingData, error: searchError } = await supabase
           .from('pest_detections')
           .select('analysis_result')
-          .filter('analysis_result->pest->>name', 'ilike', `%${localRes.pest.name}%`)
+          .ilike('analysis_result->pest->name', `%${localRes.pest.name}%`)
           .not('analysis_result', 'is', null)
           .limit(1);
+
+        if (searchError) console.warn("[Economy] Erro na busca de cache:", searchError);
 
         if (existingData && existingData.length > 0) {
           const cachedResult = typeof existingData[0].analysis_result === 'string' 
@@ -1988,13 +2094,15 @@ const App: React.FC = () => {
 
       // --- ECONOMIA DE API PARA UPLOAD ---
       if (localRes.pestFound && localRes.confidence > 0.60 && localRes.pest) {
-        console.log(`[History] Buscando referência no banco para: ${localRes.pest.name}`);
-        const { data: existingData } = await supabase
+        console.log(`[Economy] Buscando referência no banco para: ${localRes.pest.name}`);
+        const { data: existingData, error: searchError } = await supabase
           .from('pest_detections')
           .select('analysis_result')
-          .filter('analysis_result->pest->>name', 'ilike', `%${localRes.pest.name}%`)
+          .ilike('analysis_result->pest->name', `%${localRes.pest.name}%`)
           .not('analysis_result', 'is', null)
           .limit(1);
+
+        if (searchError) console.warn("[Economy] Erro na busca de cache (Upload):", searchError);
 
         if (existingData && existingData.length > 0) {
           const cachedResult = typeof existingData[0].analysis_result === 'string' 
@@ -2581,12 +2689,21 @@ const App: React.FC = () => {
              </div>
 
              <div 
+                ref={videoContainerRef}
                 className="w-full aspect-[3/4] bg-slate-900 rounded-[4rem] overflow-hidden border-8 border-white shadow-2xl relative"
-                onTouchStart={handleTouchStart}
-                onTouchMove={handleTouchMove}
                 style={{ touchAction: 'none' }}
               >
-                <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  playsInline 
+                  muted 
+                  className="w-full h-full object-cover" 
+                  style={{ 
+                    transform: isHardwareZoom.current ? 'none' : `scale(${zoomLevel})`, 
+                    transformOrigin: 'center' 
+                  }}
+                />
                 
                 <div className="absolute top-6 left-6 flex gap-3 z-50">
                   <button 
