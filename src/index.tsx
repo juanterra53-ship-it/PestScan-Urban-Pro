@@ -1610,8 +1610,54 @@ const App: React.FC = () => {
     }
   };
 
-  const saveToOfflineQueue = (res: RecognitionResult, validatedLoc: any, dataUrl: string) => {
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [maxZoom, setMaxZoom] = useState(1);
+  const touchStartDist = useRef<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      touchStartDist.current = Math.hypot(
+        e.touches[0].pageX - e.touches[1].pageX,
+        e.touches[0].pageY - e.touches[1].pageY
+      );
+    }
+  };
+
+  const handleTouchMove = async (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && touchStartDist.current && streamRef.current) {
+      const dist = Math.hypot(
+        e.touches[0].pageX - e.touches[1].pageX,
+        e.touches[0].pageY - e.touches[1].pageY
+      );
+      const delta = dist / touchStartDist.current;
+      const track = streamRef.current.getVideoTracks()[0];
+      const capabilities = track.getCapabilities() as any;
+      
+      if (capabilities.zoom) {
+        const newZoom = Math.min(capabilities.zoom.max, Math.max(capabilities.zoom.min, zoomLevel * delta));
+        try {
+          await (track as any).applyConstraints({ advanced: [{ zoom: newZoom }] });
+          setZoomLevel(newZoom);
+          touchStartDist.current = dist;
+        } catch (err) {
+          console.warn("Zoom error:", err);
+        }
+      }
+    }
+  };
+
+  const saveToOfflineQueue = async (res: RecognitionResult, validatedLoc: any, dataUrl: string) => {
     console.log("[Offline] Adicionando à fila de sincronização...");
+    
+    // OTIMIZAÇÃO CRÍTICA: Reduz a imagem para miniatura para não estourar o localStorage
+    let optimizedDataUrl = dataUrl;
+    try {
+      const smallBase64 = await resizeImage(dataUrl, 300);
+      optimizedDataUrl = `data:image/jpeg;base64,${smallBase64}`;
+    } catch (e) {
+      console.warn("Erro ao otimizar imagem offline:", e);
+    }
+
     const offlineItem = {
       pest_name: res.pest?.name || 'Scan',
       confidence: Number(res.confidence) || 0,
@@ -1619,21 +1665,25 @@ const App: React.FC = () => {
       longitude: validatedLoc.lon,
       location_name: validatedLoc.address,
       analysis_result: { ...res, location: { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address } },
-      image_data: dataUrl,
+      image_data: optimizedDataUrl,
       timestamp: Date.now()
     };
     
-    const queue = JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]');
-    queue.push(offlineItem);
-    localStorage.setItem('pestscan_offline_queue', JSON.stringify(queue));
+    try {
+      const queue = JSON.parse(localStorage.getItem('pestscan_offline_queue') || '[]');
+      queue.push(offlineItem);
+      localStorage.setItem('pestscan_offline_queue', JSON.stringify(queue));
+      showToast("Offline: Detecção salva localmente.", "info");
+    } catch (e) {
+      console.error("Erro crítico de Storage:", e);
+      showToast("Memória cheia! Sincronize os itens pendentes.", "error");
+    }
     
-    showToast("Offline: Detecção salva localmente e será sincronizada em breve.", "info");
-    
-    // Atualiza o histórico local imediatamente para mostrar no mapa
+    // Atualiza o histórico local imediatamente
     const localEntry = {
       id: `temp_${Date.now()}`,
       timestamp: offlineItem.timestamp,
-      image: dataUrl,
+      image: optimizedDataUrl,
       result: offlineItem.analysis_result,
       location: offlineItem.location_name
     };
@@ -1714,7 +1764,39 @@ const App: React.FC = () => {
       const localRes = results.sort((a, b) => b.confidence - a.confidence)[0];
       setNormMode(localRes.normalizationMode || 0);
       
-      res = await analyzePestImage(base64, canvas, normMode);
+      // --- ECONOMIA DE API (BUSCA NO BANCO) ---
+      if (localRes.pestFound && localRes.confidence > 0.60 && localRes.pest) {
+        console.log(`[History] Buscando referência no banco para: ${localRes.pest.name}`);
+        const { data: existingData } = await supabase
+          .from('pest_detections')
+          .select('analysis_result')
+          .filter('analysis_result->pest->>name', 'ilike', `%${localRes.pest.name}%`)
+          .not('analysis_result', 'is', null)
+          .limit(1);
+
+        if (existingData && existingData.length > 0) {
+          const cachedResult = typeof existingData[0].analysis_result === 'string' 
+            ? JSON.parse(existingData[0].analysis_result) 
+            : existingData[0].analysis_result;
+
+          if (cachedResult && cachedResult.pestFound) {
+            console.log("✅ [History] Usando ficha técnica do banco de dados.");
+            res = {
+              ...cachedResult,
+              confidence: localRes.confidence,
+              message: `Identificado via Referência Local (${localRes.pest.name})`,
+              source: 'Banco de Dados',
+              capturedImage: undefined
+            };
+          } else {
+            res = await analyzePestImage(base64, canvas, normMode);
+          }
+        } else {
+          res = await analyzePestImage(base64, canvas, normMode);
+        }
+      } else {
+        res = await analyzePestImage(base64, canvas, normMode);
+      }
 
       const isConnectionError = res.message?.includes("Erro de Conexão") || res.message?.includes("Failed to fetch");
       if ((isConnectionError || (!res.pestFound && localRes.confidence > 0.85)) && localRes.pestFound) {
@@ -1799,7 +1881,7 @@ const App: React.FC = () => {
             
             // SALVAMENTO OFFLINE (QUEUE)
             if (!navigator.onLine || e.message?.includes("Failed to fetch") || e.message?.includes("network")) {
-              saveToOfflineQueue(res, validatedLoc, dataUrl);
+              await saveToOfflineQueue(res, validatedLoc, dataUrl);
             } else {
               const errorMsg = e.message || e.details || "Erro de rede ou permissão";
               showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
@@ -1808,7 +1890,7 @@ const App: React.FC = () => {
         } else {
           // MODO OFFLINE (Sem login)
           console.log("[Offline] Modo local sem login. Salvando apenas localmente.");
-          saveToOfflineQueue(res, validatedLoc, dataUrl);
+          await saveToOfflineQueue(res, validatedLoc, dataUrl);
         }
       }
     } catch (e: any) {
@@ -1881,14 +1963,48 @@ const App: React.FC = () => {
       const localRes = results.sort((a, b) => b.confidence - a.confidence)[0];
       setNormMode(localRes.normalizationMode || 0);
 
-      const resRaw = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
-      let res = resRaw;
-
       // Aguarda a localização
       const finalLoc = await locationPromise;
       const lat = isValidCoord(finalLoc.lat) ? finalLoc.lat : (isValidCoord(location?.lat) ? location!.lat : -23.5505);
       const lon = isValidCoord(finalLoc.lon) ? finalLoc.lon : (isValidCoord(location?.lon) ? location!.lon : -46.6333);
       const validatedLoc = { lat, lon, address: finalLoc.address || location?.address || "Localização Padrão (SP)" };
+
+      let res: RecognitionResult;
+
+      // --- ECONOMIA DE API PARA UPLOAD ---
+      if (localRes.pestFound && localRes.confidence > 0.60 && localRes.pest) {
+        console.log(`[History] Buscando referência no banco para: ${localRes.pest.name}`);
+        const { data: existingData } = await supabase
+          .from('pest_detections')
+          .select('analysis_result')
+          .filter('analysis_result->pest->>name', 'ilike', `%${localRes.pest.name}%`)
+          .not('analysis_result', 'is', null)
+          .limit(1);
+
+        if (existingData && existingData.length > 0) {
+          const cachedResult = typeof existingData[0].analysis_result === 'string' 
+            ? JSON.parse(existingData[0].analysis_result) 
+            : existingData[0].analysis_result;
+
+          if (cachedResult && cachedResult.pestFound) {
+            console.log("✅ [History] Usando ficha técnica do banco de dados.");
+            res = {
+              ...cachedResult,
+              confidence: localRes.confidence,
+              location: { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address },
+              message: "Ficha técnica otimizada (Cache)",
+              source: 'Banco de Dados',
+              capturedImage: undefined
+            };
+          } else {
+            res = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
+          }
+        } else {
+          res = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
+        }
+      } else {
+        res = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
+      }
 
       res.location = { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address };
       setLocation(validatedLoc);
@@ -1962,7 +2078,7 @@ const App: React.FC = () => {
             
             // SALVAMENTO OFFLINE (QUEUE)
             if (!navigator.onLine || e.message?.includes("Failed to fetch") || e.message?.includes("network")) {
-              saveToOfflineQueue(res, validatedLoc, resizedDataUrl);
+              await saveToOfflineQueue(res, validatedLoc, resizedDataUrl);
             } else {
               const errorMsg = e.message || e.details || "Erro de rede ou permissão";
               showToast(`Erro ao sincronizar: ${errorMsg}`, "error");
@@ -1971,7 +2087,7 @@ const App: React.FC = () => {
         } else {
           // MODO OFFLINE (Sem login)
           console.log("[Offline] Modo local sem login. Salvando arquivo apenas localmente.");
-          saveToOfflineQueue(res, validatedLoc, resizedDataUrl);
+          await saveToOfflineQueue(res, validatedLoc, resizedDataUrl);
         }
       }
     } catch (e: any) {
@@ -1992,7 +2108,27 @@ const App: React.FC = () => {
     const startTime = Date.now();
     setLoading(true); setError(null);
     try {
-      // Chama a IA diretamente (Removido busca no banco para evitar erros de schema)
+      // Tenta buscar no banco primeiro (Economia de API)
+      const { data: existingData } = await supabase
+        .from('pest_detections')
+        .select('analysis_result')
+        .filter('analysis_result->pest->>name', 'ilike', `%${searchTerm}%`)
+        .not('analysis_result', 'is', null)
+        .limit(1);
+
+      if (existingData && existingData.length > 0) {
+        const cachedResult = typeof existingData[0].analysis_result === 'string' 
+          ? JSON.parse(existingData[0].analysis_result) 
+          : existingData[0].analysis_result;
+          
+        if (cachedResult && cachedResult.pest) {
+          setSelectedPest(cachedResult.pest);
+          setView('detail');
+          return;
+        }
+      }
+
+      // Chama a IA diretamente (Se não tem no banco)
       const res = await analyzePestByName(searchTerm);
       if (res.pest) {
         setSelectedPest(res.pest);
@@ -2429,7 +2565,11 @@ const App: React.FC = () => {
                 )}
              </div>
 
-             <div className="w-full aspect-[3/4] bg-slate-900 rounded-[4rem] overflow-hidden border-8 border-white shadow-2xl relative">
+             <div 
+                className="w-full aspect-[3/4] bg-slate-900 rounded-[4rem] overflow-hidden border-8 border-white shadow-2xl relative"
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+              >
                 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
                 
                 <div className="absolute top-6 left-6 flex gap-3 z-50">
