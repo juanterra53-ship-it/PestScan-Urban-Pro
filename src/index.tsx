@@ -514,10 +514,21 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (view === 'report-setup' && sigCanvas.current) {
-      // Re-inicializa sempre que entrar na tela de setup para garantir que o canvas esteja correto
-      signaturePadRef.current = new SignaturePad(sigCanvas.current, {
+      const canvas = sigCanvas.current;
+      const ratio = Math.max(window.devicePixelRatio || 1, 1);
+      canvas.width = canvas.offsetWidth * ratio;
+      canvas.height = canvas.offsetHeight * ratio;
+      canvas.getContext("2d")?.scale(ratio, ratio);
+
+      signaturePadRef.current = new SignaturePad(canvas, {
         backgroundColor: 'rgba(255, 255, 255, 0)',
         penColor: '#064e3b'
+      });
+
+      signaturePadRef.current.addEventListener("endStroke", () => {
+        if (signaturePadRef.current) {
+          setSignature(signaturePadRef.current.toDataURL());
+        }
       });
     }
   }, [view]);
@@ -1011,8 +1022,8 @@ const App: React.FC = () => {
     
     // Detecta se é dispositivo móvel para otimizar memória
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    const captureWidth = isMobile ? 750 : 1024; // Reduzido para mobile
-    const captureScale = isMobile ? 1.2 : 2; // Reduzido para mobile
+    const captureWidth = 650; // Largura reduzida para forçar elementos (texto) a serem maiores no PDF
+    const captureScale = 3; // Alta densidade de pixels para nitidez
 
     const originalStyle = {
       width: element.style.width,
@@ -1051,11 +1062,11 @@ const App: React.FC = () => {
       try {
         // Tenta toPng primeiro (mais leve no mobile se configurado corretamente)
         const dataUrl = await toPng(element, {
-          quality: 0.8,
+          quality: 1.0,
           backgroundColor: '#ffffff',
           pixelRatio: captureScale,
           cacheBust: false, // Desativado para evitar problemas de CORS
-          skipFonts: true,
+          skipFonts: false,
         });
         
         const img = new Image();
@@ -1121,8 +1132,8 @@ const App: React.FC = () => {
       });
 
       // Reduz qualidade no mobile para evitar crash de memória no addImage
-      const imgQuality = isMobile ? 0.7 : 0.85;
-      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', imgQuality), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, 'FAST');
+      const imgQuality = isMobile ? 0.85 : 0.95;
+      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', imgQuality), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, isMobile ? 'MEDIUM' : 'SLOW');
       
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
       const pdfBlob = dynamicPdf.output('blob');
@@ -3507,7 +3518,7 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div className="space-y-4">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-2">
                   <User size={14} /> Nome Completo do Cliente
                 </label>
                 <input 
@@ -3520,7 +3531,7 @@ const App: React.FC = () => {
               </div>
 
               <div className="space-y-4">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-2">
                   <Globe size={14} /> Área Afetada (m² ou Hectares)
                 </label>
                 <input 
@@ -3544,7 +3555,7 @@ const App: React.FC = () => {
               </div>
 
               <div className="space-y-4">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-2">
                   <Activity size={14} /> Medidas Realizadas
                 </label>
                 <textarea 
@@ -3568,7 +3579,7 @@ const App: React.FC = () => {
               </div>
 
               <div className="space-y-4">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-2">
                   <Info size={14} /> Observações Adicionais
                 </label>
                 <textarea 
@@ -3592,7 +3603,7 @@ const App: React.FC = () => {
               </div>
 
               <div className="space-y-4">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-2">
                   <User size={14} /> Assinatura Eletrônica
                 </label>
                 <div className="flex flex-col gap-4">
@@ -3601,16 +3612,6 @@ const App: React.FC = () => {
                       ref={sigCanvas}
                       className="w-full h-40 cursor-crosshair"
                       style={{ width: '100%', height: '160px' }}
-                      onMouseUp={() => {
-                        if (signaturePadRef.current) {
-                          setSignature(signaturePadRef.current.toDataURL());
-                        }
-                      }}
-                      onTouchEnd={() => {
-                        if (signaturePadRef.current) {
-                          setSignature(signaturePadRef.current.toDataURL());
-                        }
-                      }}
                     />
                     <div className="absolute top-2 right-2 flex gap-2">
                       <button 
@@ -3686,15 +3687,15 @@ const App: React.FC = () => {
               {/* Header do Relatório */}
               <div className="p-10 text-white relative overflow-hidden print:bg-emerald-900 print:text-white" style={{ backgroundColor: '#064e3b' }}>
                 <div className="absolute top-0 right-0 w-40 h-40 rounded-full -mr-20 -mt-20 blur-3xl print:hidden" style={{ backgroundColor: 'rgba(16, 185, 129, 0.2)' }} />
-                <div className="flex items-center gap-4 mb-6">
-                  <div className="p-3 rounded-2xl border border-emerald-400/20" style={{ backgroundColor: 'rgba(52, 211, 153, 0.2)', borderColor: 'rgba(52, 211, 153, 0.2)' }}>
-                    <ShieldCheck size={24} style={{ color: '#34d399' }} />
+                <div className="flex items-center gap-6 mb-8">
+                  <div className="p-4 rounded-2xl border border-emerald-400/20" style={{ backgroundColor: 'rgba(52, 211, 153, 0.2)', borderColor: 'rgba(52, 211, 153, 0.2)' }}>
+                    <ShieldCheck size={32} style={{ color: '#34d399' }} />
                   </div>
                   <div>
-                    <h2 className="text-xl font-black uppercase tracking-tighter" style={{ color: '#ffffff' }}>{currentResult.batchResults ? 'Relatório Consolidado de Inspeção' : 'Certificado de Inspeção'}</h2>
-                    <p className="text-[12px] font-black uppercase tracking-[0.2em]" style={{ color: '#34d399' }}>PestScan Pro • Digital Report</p>
+                    <h2 className="text-2xl font-bold uppercase" style={{ color: '#ffffff', letterSpacing: 'normal' }}>{currentResult.batchResults ? 'Relatório Consolidado de Inspeção' : 'Certificado de Inspeção'}</h2>
+                    <p className="text-[16px] font-bold uppercase" style={{ color: '#34d399', letterSpacing: 'normal' }}>PestScan Pro • Digital Report</p>
                     {reportClientName && (
-                      <p className="text-[10px] font-black uppercase tracking-widest mt-2" style={{ color: '#ffffff' }}>
+                      <p className="text-[14px] font-bold uppercase mt-2" style={{ color: '#ffffff', letterSpacing: 'normal' }}>
                         Cliente: <span className="text-emerald-400">{reportClientName}</span>
                       </p>
                     )}
@@ -3702,12 +3703,12 @@ const App: React.FC = () => {
                 </div>
                 <div className="flex justify-between items-end">
                   <div>
-                    <p className="text-[11px] font-black uppercase tracking-widest mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)' }}>ID do Relatório</p>
-                    <p className="text-sm font-mono font-bold" style={{ color: '#ffffff' }}>#PS-{Math.random().toString(36).substr(2, 9).toUpperCase()}</p>
+                    <p className="text-[14px] font-bold uppercase mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)', letterSpacing: 'normal' }}>ID do Relatório</p>
+                    <p className="text-lg font-mono font-bold" style={{ color: '#ffffff', letterSpacing: 'normal' }}>#PS-{Math.random().toString(36).substr(2, 9).toUpperCase()}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-[11px] font-black uppercase tracking-widest mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)' }}>Data de Emissão</p>
-                    <p className="text-sm font-bold" style={{ color: '#ffffff' }}>{new Date().toLocaleDateString('pt-BR')} - {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
+                    <p className="text-[14px] font-bold uppercase mb-1" style={{ color: 'rgba(52, 211, 153, 0.6)', letterSpacing: 'normal' }}>Data de Emissão</p>
+                    <p className="text-lg font-bold" style={{ color: '#ffffff', letterSpacing: 'normal' }}>{new Date().toLocaleDateString('pt-BR')} - {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
                   </div>
                 </div>
               </div>
@@ -3720,7 +3721,7 @@ const App: React.FC = () => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     {/* Mapa de Calor / Localização Geral */}
                     <div className="space-y-4">
-                      <h3 className="text-[12px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                      <h3 className="text-[12px] font-black uppercase flex items-center gap-2" style={{ color: '#94a3b8' }}>
                         <Globe size={14} /> Mapa de Ocorrências (Heatmap)
                       </h3>
                       <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner relative group" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
@@ -3774,19 +3775,34 @@ const App: React.FC = () => {
                                       detectRetina={true}
                                     />
                                     <FitBounds points={points} isCluster={isCluster} />
-                                    {validPoints.map((p, idx) => (
-                                      <CircleMarker 
-                                        key={idx}
-                                        center={[p.location!.latitude, p.location!.longitude]}
-                                        radius={8}
-                                        pathOptions={{ 
-                                          fillColor: '#ef4444', 
-                                          color: '#ffffff', 
-                                          weight: 3, 
-                                          fillOpacity: 1 
-                                        }}
-                                      />
-                                    ))}
+                                    {validPoints.map((p, idx) => {
+                                      const originalIndex = reportEntries.indexOf(p);
+                                      return (
+                                        <Marker 
+                                          key={idx}
+                                          position={[p.location!.latitude, p.location!.longitude]}
+                                          icon={L.divIcon({
+                                            className: 'custom-numbered-marker',
+                                            html: `<div style="
+                                              background-color: #ef4444;
+                                              color: white;
+                                              border: 1.5px solid white;
+                                              border-radius: 50%;
+                                              width: 18px;
+                                              height: 18px;
+                                              display: flex;
+                                              align-items: center;
+                                              justify-content: center;
+                                              font-size: 9px;
+                                              font-weight: 900;
+                                              box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                            ">${originalIndex + 1}</div>`,
+                                            iconSize: [18, 18],
+                                            iconAnchor: [9, 9]
+                                          })}
+                                        />
+                                      );
+                                    })}
                                   </MapContainer>
                                 </div>
                               );
@@ -3804,12 +3820,12 @@ const App: React.FC = () => {
                     {/* Gráfico de Distribuição */}
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
-                        <h3 className="text-[12px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                        <h3 className="text-[12px] font-black uppercase flex items-center gap-2" style={{ color: '#94a3b8' }}>
                           <Activity size={14} /> Distribuição por Espécie
                         </h3>
                         <div className="px-4 py-1.5 rounded-full border shadow-sm flex items-center gap-2 bg-white" style={{ borderColor: '#e2e8f0' }}>
                           <div className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: '#ef4444' }} />
-                          <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#475569' }}>{reportEntries.length} Focos Identificados</span>
+                          <span className="text-[10px] font-black uppercase" style={{ color: '#475569' }}>{reportEntries.length} Focos Identificados</span>
                         </div>
                       </div>
                       <div className="aspect-video w-full bg-slate-50 rounded-[2rem] p-6 border border-slate-100">
@@ -3834,7 +3850,7 @@ const App: React.FC = () => {
 
                   {/* Medidas Preventivas Sugeridas (Consolidado) */}
                   <div className="space-y-4">
-                    <h3 className="text-[12px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                    <h3 className="text-[12px] font-black uppercase flex items-center gap-2" style={{ color: '#94a3b8' }}>
                       <ShieldCheck size={14} /> Medidas Preventivas Recomendadas
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3858,24 +3874,24 @@ const App: React.FC = () => {
 
                 {/* Detalhamento Individual de cada Praga */}
                 <div className="space-y-16">
-                  <h3 className="text-xs font-black uppercase tracking-[0.3em] text-center" style={{ color: '#0f172a' }}>Detalhamento Técnico por Ocorrência</h3>
+                  <h3 className="text-base font-black uppercase text-center" style={{ color: '#0f172a' }}>Detalhamento Técnico por Ocorrência</h3>
                   
                   {reportEntries.map((entry, index) => (
                     <div key={entry.id || index} className="space-y-8 pb-16 border-b border-slate-50 last:border-0 last:pb-0">
                       <div className="flex items-center justify-between gap-4">
                         <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-[12px] font-black">
+                          <div className="w-10 h-10 rounded-full bg-slate-900 text-white flex items-center justify-center text-[14px] font-black">
                             {String(index + 1).padStart(2, '0')}
                           </div>
-                          <h4 className="text-sm font-black uppercase tracking-tight" style={{ color: '#1e293b' }}>
+                          <h4 className="text-lg font-black uppercase tracking-tight" style={{ color: '#1e293b' }}>
                             {entry.pest?.name || 'Scan Desconhecido'}
                           </h4>
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest" style={{ backgroundColor: '#f1f5f9', color: '#64748b' }}>
+                          <div className="px-3 py-1 rounded-full text-[11px] font-black uppercase" style={{ backgroundColor: '#f1f5f9', color: '#64748b' }}>
                             Confiança: {(entry.confidence * 100).toFixed(1)}%
                           </div>
-                          <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                          <div className={`px-3 py-1 rounded-full text-[11px] font-black uppercase ${
                             entry.pest?.riskLevel === 'Crítico' || entry.pest?.riskLevel === 'Alto' ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'
                           }`}>
                             Risco: {entry.pest?.riskLevel || 'Moderado'}
@@ -3884,11 +3900,11 @@ const App: React.FC = () => {
                       </div>
 
                       <div className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-8">
-                          {/* Imagem */}
-                          <div className="space-y-3">
-                            <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Evidência Fotográfica</p>
-                            <div className="w-full aspect-square rounded-3xl overflow-hidden border-2 border-slate-50 shadow-sm relative group">
+                        <div className="flex flex-row gap-8 items-start">
+                          {/* Imagem - Reduzida para não dominar o layout */}
+                          <div className="w-[140px] shrink-0 space-y-3">
+                            <p className="text-[13px] font-black uppercase tracking-widest" style={{ color: '#94a3b8' }}>Evidência</p>
+                            <div className="w-full aspect-square rounded-2xl overflow-hidden border-2 border-slate-50 shadow-sm relative">
                               <img 
                                 src={entry.capturedImage || 'https://placehold.co/400x400/e2e8f0/94a3b8?text=Sem+Imagem'} 
                                 className="w-full h-full object-cover"
@@ -3898,35 +3914,35 @@ const App: React.FC = () => {
                           </div>
 
                           {/* Informações Rápidas */}
-                          <div className="space-y-4 flex flex-col justify-center">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                              <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                                <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
-                                <p className="text-[14px] font-bold" style={{ color: '#1e293b' }}>{entry.area || 'Não informado'}</p>
+                          <div className="flex-1 space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="p-4 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                                <p className="text-[12px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Área Afetada</p>
+                                <p className="text-[18px] font-bold" style={{ color: '#1e293b' }}>{entry.area || 'Não informado'}</p>
                               </div>
-                              <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                                <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Localização</p>
-                                <p className="text-[13px] font-bold" style={{ color: '#1e293b' }}>{entry.location?.address || 'GPS indisponível'}</p>
+                              <div className="p-4 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                                <p className="text-[12px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Localização</p>
+                                <p className="text-[17px] font-bold" style={{ color: '#1e293b' }}>{entry.location?.address || 'GPS indisponível'}</p>
                               </div>
                             </div>
-                            <div className="p-5 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                              <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Coordenadas GPS</p>
-                              <p className="text-[12px] font-mono font-bold" style={{ color: '#64748b' }}>
+                            <div className="p-4 rounded-2xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
+                              <p className="text-[12px] font-black uppercase tracking-widest mb-1" style={{ color: '#94a3b8' }}>Coordenadas GPS</p>
+                              <p className="text-[16px] font-mono font-bold" style={{ color: '#64748b' }}>
                                 {entry.location?.latitude ? `${entry.location.latitude.toFixed(6)}, ${entry.location.longitude.toFixed(6)}` : 'N/A'}
                               </p>
                             </div>
                           </div>
                         </div>
 
-                        {/* Descrições Detalhadas - Agora em largura total para máxima visibilidade */}
+                        {/* Descrições Detalhadas - Aumentadas para visibilidade total */}
                         <div className="space-y-6">
                           {entry.pest && (
                             <div className="space-y-2">
-                              <p className="text-[11px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                                <Info size={12} /> Características e Hábitos da Espécie
+                              <p className="text-[15px] font-black uppercase flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                                <Info size={14} /> Características e Hábitos da Espécie
                               </p>
                               <div className="p-6 rounded-3xl border border-emerald-100/50" style={{ backgroundColor: '#f0fdf4' }}>
-                                <p className="text-[14px] font-medium leading-relaxed italic" style={{ color: '#065f46' }}>
+                                <p className="text-[20px] font-medium leading-relaxed italic" style={{ color: '#065f46' }}>
                                   {entry.pest.habits || entry.pest.description || 'Descrição técnica não disponível para esta espécie.'}
                                 </p>
                               </div>
@@ -3934,22 +3950,22 @@ const App: React.FC = () => {
                           )}
                           
                           <div className="space-y-2">
-                            <p className="text-[11px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                              <Activity size={12} /> Medidas Realizadas e Ações Corretivas
+                            <p className="text-[15px] font-black uppercase flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                              <Activity size={14} /> Medidas Realizadas e Ações Corretivas
                             </p>
                             <div className="p-6 rounded-3xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                              <p className="text-[14px] font-medium leading-relaxed" style={{ color: '#334155' }}>
+                              <p className="text-[20px] font-medium leading-relaxed" style={{ color: '#334155' }}>
                                 {entry.measures || 'Nenhuma medida registrada.'}
                               </p>
                             </div>
                           </div>
                           
                           <div className="space-y-2">
-                            <p className="text-[11px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
-                              <Info size={12} /> Observações Adicionais do Técnico
+                            <p className="text-[15px] font-black uppercase flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                              <Info size={14} /> Observações Adicionais do Técnico
                             </p>
                             <div className="p-6 rounded-3xl border border-slate-50" style={{ backgroundColor: '#f8fafc' }}>
-                              <p className="text-[14px] font-medium leading-relaxed whitespace-pre-wrap" style={{ color: '#334155' }}>
+                              <p className="text-[20px] font-medium leading-relaxed whitespace-pre-wrap" style={{ color: '#334155' }}>
                                 {entry.observations || 'Sem observações adicionais.'}
                               </p>
                             </div>
@@ -3965,27 +3981,27 @@ const App: React.FC = () => {
                 {/* Dados Técnicos e Assinatura */}
                 <div className="mt-12 pt-12 border-t border-slate-100 grid grid-cols-2 gap-8" style={{ borderColor: '#f1f5f9' }}>
                   <div className="space-y-4">
-                    <h3 className="text-[12px] font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#94a3b8' }}>
+                    <h3 className="text-[13px] font-black uppercase flex items-center gap-2" style={{ color: '#94a3b8' }}>
                       <User size={14} /> Responsável Técnico
                     </h3>
                     <div className="space-y-1">
                       <p className="text-sm font-black text-slate-900">Juan Nicolas Terra</p>
-                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Técnico em Agropecuária</p>
-                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Conselho CFTA</p>
-                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Registro Nº 40222945826</p>
+                      <p className="text-[12px] font-bold text-slate-400 uppercase">Técnico em Agropecuária</p>
+                      <p className="text-[12px] font-bold text-slate-400 uppercase">Conselho CFTA</p>
+                      <p className="text-[12px] font-bold text-slate-400 uppercase">Registro Nº 40222945826</p>
                     </div>
                   </div>
                   <div className="flex flex-col items-center justify-end">
                     {signature ? (
                       <div className="w-48 h-20 border-b-2 border-slate-900 flex items-center justify-center">
-                        <img src={signature} alt="Assinatura" className="max-h-full object-contain" />
+                        <img key={signature} src={signature} alt="Assinatura" className="max-h-full object-contain" />
                       </div>
                     ) : (
                       <div className="w-48 h-20 border-b-2 border-slate-200 flex items-center justify-center">
-                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Assinatura Digital</p>
+                        <p className="text-[10px] font-black text-slate-300 uppercase">Assinatura Digital</p>
                       </div>
                     )}
-                    <p className="mt-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">Assinatura do Técnico</p>
+                    <p className="mt-2 text-[10px] font-black text-slate-400 uppercase">Assinatura do Técnico</p>
                   </div>
                 </div>
 
@@ -3993,7 +4009,7 @@ const App: React.FC = () => {
                   <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-4 shadow-lg" style={{ backgroundColor: '#0f172a' }}>
                     <Bug size={24} className="text-emerald-400" />
                   </div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.3em]" style={{ color: '#0f172a' }}>PestScan Pro AI • Certificado Digital</p>
+                  <p className="text-[10px] font-black uppercase" style={{ color: '#0f172a' }}>PestScan Pro AI • Certificado Digital</p>
                 </div>
               </div>
             </div>
