@@ -765,13 +765,13 @@ const App: React.FC = () => {
     return L.divIcon({
       className: 'custom-pest-marker',
       html: `
-        <div style="position: relative; width: 32px; height: 32px;">
-          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background-color: #ef4444; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 8px rgba(239, 68, 68, 0.5); z-index: 2;"></div>
-          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 24px; height: 24px; background-color: #ef4444; border-radius: 50%; opacity: 0.2; animation: pulse 2s infinite; z-index: 1;"></div>
+        <div style="position: relative; width: 24px; height: 24px;">
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 10px; height: 10px; background-color: #ef4444; border: 1.5px solid white; border-radius: 50%; box-shadow: 0 0 6px rgba(239, 68, 68, 0.5); z-index: 2;"></div>
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 18px; height: 18px; background-color: #ef4444; border-radius: 50%; opacity: 0.2; animation: pulse 2s infinite; z-index: 1;"></div>
         </div>
       `,
-      iconSize: [32, 32],
-      iconAnchor: [16, 16]
+      iconSize: [24, 24],
+      iconAnchor: [12, 12]
     });
   }, []);
 
@@ -3788,17 +3788,17 @@ const App: React.FC = () => {
                                               color: white;
                                               border: 1.5px solid white;
                                               border-radius: 50%;
-                                              width: 18px;
-                                              height: 18px;
+                                              width: 12px;
+                                              height: 12px;
                                               display: flex;
                                               align-items: center;
                                               justify-content: center;
-                                              font-size: 9px;
+                                              font-size: 7px;
                                               font-weight: 900;
                                               box-shadow: 0 2px 4px rgba(0,0,0,0.3);
                                             ">${originalIndex + 1}</div>`,
-                                            iconSize: [18, 18],
-                                            iconAnchor: [9, 9]
+                                            iconSize: [12, 12],
+                                            iconAnchor: [6, 6]
                                           })}
                                         />
                                       );
@@ -3910,6 +3910,25 @@ const App: React.FC = () => {
                                 className="w-full h-full object-cover"
                                 referrerPolicy="no-referrer"
                               />
+                            </div>
+                            {/* Data, Hora e Localização da Evidência */}
+                            <div className="space-y-1.5 px-1">
+                              <div className="flex items-center gap-1.5">
+                                <div className="p-1 rounded-md bg-slate-50 border border-slate-100">
+                                  <Clock size={10} className="text-slate-400" />
+                                </div>
+                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-tight">
+                                  {entry.timestamp ? new Date(entry.timestamp).toLocaleDateString('pt-BR') : 'Data N/A'} às {entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'Hora N/A'}
+                                </p>
+                              </div>
+                              <div className="flex items-start gap-1.5">
+                                <div className="p-1 rounded-md bg-slate-50 border border-slate-100 shrink-0">
+                                  <MapPin size={10} className="text-emerald-500" />
+                                </div>
+                                <p className="text-[9px] font-bold text-slate-400 uppercase leading-tight">
+                                  {entry.location?.address || 'Localização Indisponível'}
+                                </p>
+                              </div>
                             </div>
                           </div>
 
