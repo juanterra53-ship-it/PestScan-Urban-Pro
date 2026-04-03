@@ -87,13 +87,13 @@ const FitBounds: React.FC<{ points: { latitude: number, longitude: number }[], i
         if (validPoints.length === 0) return;
 
         if (validPoints.length === 1) {
-          map.setView([validPoints[0].latitude, validPoints[0].longitude], 17);
+          map.setView([validPoints[0].latitude, validPoints[0].longitude], 18);
         } else {
           const bounds = L.latLngBounds(validPoints.map(p => [p.latitude, p.longitude]));
           if (isCluster) {
-            map.setView(bounds.getCenter(), 17);
+            map.setView(bounds.getCenter(), 19);
           } else {
-            map.fitBounds(bounds, { padding: [60, 60], maxZoom: 17 });
+            map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 });
           }
         }
       }
@@ -1022,8 +1022,8 @@ const App: React.FC = () => {
     
     // Detecta se é dispositivo móvel para otimizar memória
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    const captureWidth = 650; // Largura reduzida para forçar elementos (texto) a serem maiores no PDF
-    const captureScale = 3; // Alta densidade de pixels para nitidez
+    const captureWidth = 800; // Aumentado para mais detalhe sem perder a proporção
+    const captureScale = 4; // Aumentado para 4x para ultra-alta definição
 
     const originalStyle = {
       width: element.style.width,
@@ -1055,8 +1055,8 @@ const App: React.FC = () => {
       element.style.backgroundColor = '#ffffff';
       element.style.overflow = 'visible';
       
-      // Aguarda renderização (mais tempo no mobile)
-      await new Promise(r => setTimeout(r, isMobile ? 4000 : 2500));
+      // Aguarda renderização completa (especialmente do mapa e imagens)
+      await new Promise(r => setTimeout(r, isMobile ? 8000 : 6000));
       
       let canvas;
       try {
@@ -1131,8 +1131,8 @@ const App: React.FC = () => {
         format: [pageWidth, finalHeight]
       });
 
-      // Reduz qualidade no mobile para evitar crash de memória no addImage
-      const imgQuality = isMobile ? 0.85 : 0.95;
+      // Qualidade máxima para garantir visibilidade total
+      const imgQuality = 1.0;
       dynamicPdf.addImage(canvas.toDataURL('image/jpeg', imgQuality), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, isMobile ? 'MEDIUM' : 'SLOW');
       
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
@@ -3724,7 +3724,7 @@ const App: React.FC = () => {
                       <h3 className="text-[12px] font-black uppercase flex items-center gap-2" style={{ color: '#94a3b8' }}>
                         <Globe size={14} /> Mapa de Ocorrências (Heatmap)
                       </h3>
-                      <div className="aspect-video rounded-[2rem] overflow-hidden border-4 shadow-inner relative group" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
+                      <div className="h-[500px] rounded-[2.5rem] overflow-hidden border-4 shadow-inner relative group" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
                         {reportEntries.some(e => e.location && isValidCoord(e.location.latitude)) ? (
                           <>
                             {(() => {
@@ -3786,19 +3786,19 @@ const App: React.FC = () => {
                                             html: `<div style="
                                               background-color: #ef4444;
                                               color: white;
-                                              border: 1.5px solid white;
+                                              border: 1px solid white;
                                               border-radius: 50%;
-                                              width: 12px;
-                                              height: 12px;
+                                              width: 7px;
+                                              height: 7px;
                                               display: flex;
                                               align-items: center;
                                               justify-content: center;
-                                              font-size: 7px;
+                                              font-size: 4px;
                                               font-weight: 900;
-                                              box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                              box-shadow: 0 1px 2px rgba(0,0,0,0.3);
                                             ">${originalIndex + 1}</div>`,
-                                            iconSize: [12, 12],
-                                            iconAnchor: [6, 6]
+                                            iconSize: [7, 7],
+                                            iconAnchor: [3.5, 3.5]
                                           })}
                                         />
                                       );
