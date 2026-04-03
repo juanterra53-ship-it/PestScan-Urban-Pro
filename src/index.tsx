@@ -87,13 +87,13 @@ const FitBounds: React.FC<{ points: { latitude: number, longitude: number }[], i
         if (validPoints.length === 0) return;
 
         if (validPoints.length === 1) {
-          map.setView([validPoints[0].latitude, validPoints[0].longitude], 18);
+          map.setView([validPoints[0].latitude, validPoints[0].longitude], 20);
         } else {
           const bounds = L.latLngBounds(validPoints.map(p => [p.latitude, p.longitude]));
           if (isCluster) {
-            map.setView(bounds.getCenter(), 19);
+            map.setView(bounds.getCenter(), 20);
           } else {
-            map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 });
+            map.fitBounds(bounds, { padding: [15, 15], maxZoom: 20 });
           }
         }
       }
@@ -1022,8 +1022,8 @@ const App: React.FC = () => {
     
     // Detecta se é dispositivo móvel para otimizar memória
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    const captureWidth = 800; // Aumentado para mais detalhe sem perder a proporção
-    const captureScale = 4; // Aumentado para 4x para ultra-alta definição
+    const captureWidth = 1200; // Aumentado para 1200px para base de pixels muito maior
+    const captureScale = 5; // Aumentado para 5x para ultra-definição extrema
 
     const originalStyle = {
       width: element.style.width,
@@ -3786,19 +3786,19 @@ const App: React.FC = () => {
                                             html: `<div style="
                                               background-color: #ef4444;
                                               color: white;
-                                              border: 1px solid white;
+                                              border: 1.5px solid white;
                                               border-radius: 50%;
-                                              width: 7px;
-                                              height: 7px;
+                                              width: 14px;
+                                              height: 14px;
                                               display: flex;
                                               align-items: center;
                                               justify-content: center;
-                                              font-size: 4px;
+                                              font-size: 9px;
                                               font-weight: 900;
-                                              box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+                                              box-shadow: 0 2px 4px rgba(0,0,0,0.4);
                                             ">${originalIndex + 1}</div>`,
-                                            iconSize: [7, 7],
-                                            iconAnchor: [3.5, 3.5]
+                                            iconSize: [14, 14],
+                                            iconAnchor: [7, 7]
                                           })}
                                         />
                                       );
