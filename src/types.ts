@@ -33,6 +33,7 @@ export interface RecognitionResult {
   capturedImage?: string;
   sources?: GroundingSource[];
   source?: 'IA Local' | 'Banco de Dados' | 'IA Online (Gemini)';
+  scanType?: 'pest' | 'bpf';
   maxScoreIndex?: number;
   topResults?: { label: string; confidence: number; index: number }[];
   normalizationMode?: number;
