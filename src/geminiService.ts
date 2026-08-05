@@ -1,7 +1,8 @@
 import { GoogleGenAI, Type, Modality, GenerateContentResponse } from "@google/genai";
-import { RecognitionResult } from "./types";
+import { RecognitionResult, PestInfo } from "./types";
 import { ENCYCLOPEDIA_DATA } from './data/encyclopedia';
 import { resizeImage } from './utils';
+import { supabase } from './supabaseClient';
 
 /**
  * PESTSCAN PRO - SERVICE LAYER v2.7.1
@@ -44,6 +45,36 @@ const getApiKey = (): string => {
 };
 
 const PEST_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    pestFound: { type: Type.BOOLEAN },
+    confidence: { type: Type.NUMBER },
+    pest: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING },
+        scientificName: { type: Type.STRING },
+        category: { type: Type.STRING },
+        riskLevel: { type: Type.STRING },
+        characteristics: { type: Type.ARRAY, items: { type: Type.STRING } },
+        anatomy: { type: Type.STRING },
+        members: { type: Type.STRING },
+        habits: { type: Type.STRING },
+        reproduction: { type: Type.STRING },
+        larvalPhase: { type: Type.STRING },
+        controlMethods: { type: Type.ARRAY, items: { type: Type.STRING } },
+        physicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
+        chemicalMeasures: { type: Type.ARRAY, items: { type: Type.STRING } },
+        healthRisks: { type: Type.STRING },
+        source: { type: Type.STRING },
+      },
+      required: ["name", "scientificName", "category", "riskLevel"]
+    }
+  },
+  required: ["pestFound", "confidence"]
+};
+
+const BPF_SCHEMA = {
   type: Type.OBJECT,
   properties: {
     pestFound: { type: Type.BOOLEAN },
@@ -427,10 +458,49 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
   if (navigator.onLine) {
     const apiKey = getApiKey();
     if (!apiKey || apiKey.length < 10) {
-      return { pestFound: false, confidence: 0, message: "Erro: API Key ausente no ambiente." };
+      console.error("❌ [v2.7.4] API Key ausente ou inválida.");
+      return { 
+        pestFound: false, 
+        confidence: 0, 
+        message: "Erro: API Key do Gemini não configurada." 
+      };
     }
 
     try {
+      // OTIMIZAÇÃO: Busca no Banco de Dados antes de chamar a API
+      // Se a IA Local identificou com alta confiança, verificamos se já temos a ficha técnica no Supabase
+      if (elementToUse) {
+        const localRes = await analyzeOffline(elementToUse, normMode);
+        if (localRes.pestFound && localRes.confidence > 0.85 && localRes.pest?.name) {
+          const cleanName = localRes.pest.name;
+          console.log(`🔍 [Cache] Verificando banco de dados para: ${cleanName}`);
+          
+          try {
+            const { data: cachedPest, error: cacheError } = await supabase
+              .from('pest_knowledge')
+              .select('*')
+              .eq('name', cleanName)
+              .single();
+            
+            if (cachedPest && !cacheError) {
+              console.log(`✅ [Cache] Ficha técnica encontrada no Banco de Dados para: ${cleanName}`);
+              return {
+                ...localRes,
+                pest: {
+                  ...cachedPest.details,
+                  name: cleanName,
+                  source: "Banco de Dados (Cache)"
+                },
+                source: 'Banco de Dados',
+                message: `Identificado via Banco de Dados: ${cleanName}`
+              };
+            }
+          } catch (dbErr) {
+            console.warn("Erro ao acessar cache do banco:", dbErr);
+          }
+        }
+      }
+
       const ai = new GoogleGenAI({ apiKey });
       // gemini-3.1-flash-lite-preview costuma ter limites mais generosos e maior estabilidade
       const MODELS = ['gemini-3.1-flash-lite-preview', 'gemini-3-flash-preview', 'gemini-flash-latest'];
@@ -457,7 +527,28 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
         const text = response.text;
         if (!text) throw new Error("Resposta vazia da IA.");
         const parsed = JSON.parse(text);
-        if (parsed.pest) parsed.pest.source = `IA Online (${currentModel})`;
+        
+        if (parsed.pest) {
+          parsed.pest.source = `IA Online (${currentModel})`;
+          
+          // SALVAR NO CACHE: Se a IA identificou uma praga nova, salvamos no banco para economizar no futuro
+          if (parsed.pestFound && parsed.confidence > 0.80) {
+            try {
+              const { error: saveError } = await supabase
+                .from('pest_knowledge')
+                .upsert({
+                  name: parsed.pest.name,
+                  details: parsed.pest,
+                  updated_at: new Date().toISOString()
+                }, { onConflict: 'name' });
+              
+              if (!saveError) console.log(`💾 [Cache] Ficha de ${parsed.pest.name} salva/atualizada no Banco.`);
+            } catch (saveErr) {
+              console.warn("Erro ao salvar no cache:", saveErr);
+            }
+          }
+        }
+        
         return {
           ...parsed,
           source: 'IA Online (Gemini)'
@@ -487,6 +578,86 @@ export const analyzePestImage = async (base64Raw: string, imageElement?: HTMLIma
 
   if (elementToUse) return await analyzeOffline(elementToUse, normMode);
   return { pestFound: false, confidence: 0, message: "Sem conexão com a internet." };
+};
+
+export const analyzeBpfImage = async (base64Raw: string, imageElement?: HTMLImageElement | HTMLCanvasElement, normMode: number = 0): Promise<RecognitionResult> => {
+  const base64 = await resizeImage(base64Raw, 512);
+  
+  if (navigator.onLine) {
+    const apiKey = getApiKey();
+    if (!apiKey || apiKey.length < 10) {
+      console.error("❌ API Key ausente para BPF.");
+      return { 
+        pestFound: false, 
+        confidence: 0, 
+        message: "Erro: API Key do Gemini não configurada." 
+      };
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const MODELS = ['gemini-3.1-flash-lite-preview', 'gemini-3-flash-preview', 'gemini-flash-latest'];
+
+      return await fetchWithRetry<RecognitionResult>(async (attempt) => {
+        const currentModel = MODELS[attempt % MODELS.length];
+        console.log(`🚀 Analisando Não Conformidade BPF com ${currentModel}...`);
+        
+        const response = await ai.models.generateContent({
+          model: currentModel,
+          contents: {
+            parts: [
+              { text: `Você é um especialista em Controle de Qualidade, Vigilância Sanitária e Boas Práticas de Fabricação (BPF). 
+Análise esta imagem para identificar NÃO CONFORMIDADES físicas, estruturais, de higiene ou de processos (ex: portas abertas, frestas, sujidades, ferrugem, goteiras, lixo destampado, fiação exposta, etc.). 
+Forneça um laudo técnico completo contendo:
+- name: Nome claro da não conformidade (ex: "Fresta na base da porta", "Sujidade acumulada", "Porta corta-fogo aberta").
+- scientificName: Classificação técnica (ex: "Não Conformidade BPF - Acesso Física", "Higiene Operacional").
+- category: Deve ser obrigatoriamente "Não Conformidade".
+- riskLevel: Grau de risco ("Baixo", "Moderado", "Alto", "Crítico").
+- characteristics: Principais perigos associados (ex: ["Acesso de pragas", "Contaminação cruzada"]).
+- anatomy: Descrição detalhada do problema observado na imagem e possíveis causas raiz.
+- members: Gravidade / Setor afetado.
+- habits: Comportamento operacional recomendado para evitar reincidência.
+- reproduction: Potencial de contaminação ou agravamento se não corrigido.
+- larvalPhase: Sinais precoces a monitorar na rotina de inspeção.
+- controlMethods: Soluções / Ações corretivas para sanar o problema (métodos de controle).
+- physicalMeasures: Medidas físicas e corretivas necessárias (instalação de dispositivos, barreiras físicas, reparo civil, etc.).
+- chemicalMeasures: Medidas químicas, de sanitização ou desinfecção aplicáveis (ex: cloro 200ppm, detergente alcalino).
+- healthRisks: Riscos sanitários ou de contaminação cruzada associados.
+
+Retorne um JSON estrito seguindo o esquema estrutural compatível para que o app renderize sem problemas.` },
+              { inlineData: { mimeType: "image/jpeg", data: base64 } }
+            ]
+          },
+          config: { 
+            responseMimeType: "application/json",
+            responseSchema: BPF_SCHEMA as any,
+            temperature: 0.1
+          }
+        });
+
+        const text = response.text;
+        if (!text) throw new Error("Resposta vazia da IA.");
+        const parsed = JSON.parse(text);
+        
+        if (parsed.pest) {
+          parsed.pest.source = `IA Online (${currentModel})`;
+          parsed.scanType = 'bpf';
+        }
+        
+        return {
+          ...parsed,
+          scanType: 'bpf',
+          source: 'IA Online (Gemini)'
+        };
+      }, 3);
+    } catch (err: any) {
+      const errorMsg = err.message || JSON.stringify(err);
+      console.error("Erro Gemini BPF:", errorMsg);
+      return { pestFound: false, confidence: 0, message: `Erro ao analisar BPF: ${errorMsg.substring(0, 50)}` };
+    }
+  }
+
+  return { pestFound: false, confidence: 0, message: "Sem conexão com a internet para análise por IA online." };
 };
 
 export const analyzePestByName = async (pestName: string): Promise<RecognitionResult> => {
