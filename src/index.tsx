@@ -37,6 +37,7 @@ import PestScanPrivacy from './legal/PestScanPrivacy';
 import { 
   analyzePestImage, 
   analyzePestByName, 
+  analyzeBpfImage,
   loadLocalModel, 
   isLocalModelLoaded, 
   isLocalModelLoading,
@@ -87,17 +88,17 @@ const FitBounds: React.FC<{ points: { latitude: number, longitude: number }[], i
         if (validPoints.length === 0) return;
 
         if (validPoints.length === 1) {
-          map.setView([validPoints[0].latitude, validPoints[0].longitude], 20);
+          map.setView([validPoints[0].latitude, validPoints[0].longitude], 20, { animate: false });
         } else {
           const bounds = L.latLngBounds(validPoints.map(p => [p.latitude, p.longitude]));
           if (isCluster) {
-            map.setView(bounds.getCenter(), 20);
+            map.setView(bounds.getCenter(), 20, { animate: false });
           } else {
-            map.fitBounds(bounds, { padding: [15, 15], maxZoom: 20 });
+            map.fitBounds(bounds, { padding: [20, 20], maxZoom: 20, animate: false });
           }
         }
       }
-    }, 300);
+    }, 1000);
     return () => clearTimeout(timer);
   }, [points, map, isCluster]);
   return null;
@@ -266,6 +267,7 @@ const PestBioCard = ({ pest }: { pest: PestInfo }) => (
 
 const App: React.FC = () => {
   const [view, setView] = useState<'splash' | 'auth' | 'main' | 'camera' | 'history' | 'result' | 'detail' | 'privacy' | 'report' | 'report-setup' | 'map'>('splash');
+  const [scanMode, setScanMode] = useState<'pest' | 'bpf'>('pest');
   const viewRef = useRef(view);
   useEffect(() => { viewRef.current = view; }, [view]);
   const [loading, setLoading] = useState(false);
@@ -330,23 +332,36 @@ const App: React.FC = () => {
   const [isFetchingWeather, setIsFetchingWeather] = useState(false);
 
   const fetchWeather = useCallback(async (lat: number, lon: number) => {
-    if (isFetchingWeather) return;
+    if (isFetchingWeather || (weather && Math.random() > 0.1)) return; // Evita chamadas excessivas se já temos dados recentes
     setIsFetchingWeather(true);
     try {
-      const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m`);
+      // Usando timeout para evitar que a requisição fique pendurada
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const response = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m`,
+        { signal: controller.signal }
+      );
+      
+      clearTimeout(timeoutId);
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      
       const data = await response.json();
-      if (data.current) {
+      if (data && data.current) {
         setWeather({
           temp: Math.round(data.current.temperature_2m),
           humidity: Math.round(data.current.relative_humidity_2m)
         });
       }
     } catch (e) {
-      console.error("Erro ao buscar clima:", e);
+      // Log silencioso para evitar poluir a UI do usuário em caso de falha de rede temporária
+      console.warn("Aviso: Falha temporária ao buscar dados climáticos. O sistema tentará novamente na próxima atualização de localização.", e);
     } finally {
       setIsFetchingWeather(false);
     }
-  }, [isFetchingWeather]);
+  }, [isFetchingWeather, weather]);
 
   useEffect(() => {
     if (view === 'map' && location) {
@@ -373,6 +388,12 @@ const App: React.FC = () => {
 
   const [mapMode, setMapMode] = useState<'street' | 'satellite'>('satellite');
   const [activeBatchIndex, setActiveBatchIndex] = useState(0);
+
+  // Estados para busca de endereço e edição manual de localização
+  const [addressSearchQuery, setAddressSearchQuery] = useState('');
+  const [isSearchingAddress, setIsSearchingAddress] = useState(false);
+  const [isEditingAddress, setIsEditingAddress] = useState(false);
+  const [manualAddressInput, setManualAddressInput] = useState('');
 
   // Sincroniza campos do relatório com o resultado atual
   useEffect(() => {
@@ -417,52 +438,82 @@ const App: React.FC = () => {
     if (!navigator.geolocation) return;
 
     let watchId: number;
-    const startWatching = () => {
-      watchId = navigator.geolocation.watchPosition(
-        async (position) => {
-          const { latitude, longitude, accuracy } = position.coords;
-          
-          if (!isValidCoord(latitude) || !isValidCoord(longitude)) return;
+    let highAccuracy = true;
+    let fallbackTimer: NodeJS.Timeout | null = null;
 
-          const dist = Math.sqrt(Math.pow(latitude - lastLocRef.current.lat, 2) + Math.pow(longitude - lastLocRef.current.lon, 2));
-          const now = Date.now();
-          
-          // Só atualiza se moveu significativamente OU se passou mais de 30 segundos
-          if (dist > 0.0002 || !location || (now - lastWatchGeocodeTimeRef.current > 30000)) {
-            lastLocRef.current = { lat: latitude, lon: longitude };
-            setGpsStatus('active');
+    const startWatching = () => {
+      try {
+        watchId = navigator.geolocation.watchPosition(
+          async (position) => {
+            const { latitude, longitude } = position.coords;
             
-            // Throttle para geocodificação no watch: no máximo 1 a cada 15 segundos
-            if (now - lastWatchGeocodeTimeRef.current > 15000 || !location) {
-              lastWatchGeocodeTimeRef.current = now;
-              try {
-                const address = await getReverseGeocoding(latitude, longitude);
-                setLocation({ lat: latitude, lon: longitude, address });
-              } catch (e) {
-                console.error("Erro ao obter endereço:", e);
+            if (!isValidCoord(latitude) || !isValidCoord(longitude)) return;
+
+            const dist = Math.sqrt(Math.pow(latitude - lastLocRef.current.lat, 2) + Math.pow(longitude - lastLocRef.current.lon, 2));
+            const now = Date.now();
+            
+            // Só atualiza se moveu significativamente OU se passou mais de 30 segundos
+            if (dist > 0.0002 || !location || (now - lastWatchGeocodeTimeRef.current > 30000)) {
+              lastLocRef.current = { lat: latitude, lon: longitude };
+              setGpsStatus('active');
+              
+              // Throttle para geocodificação no watch: no máximo 1 a cada 15 segundos
+              if (now - lastWatchGeocodeTimeRef.current > 15000 || !location) {
+                lastWatchGeocodeTimeRef.current = now;
+                try {
+                  const address = await getReverseGeocoding(latitude, longitude);
+                  setLocation({ lat: latitude, lon: longitude, address });
+                } catch (e) {
+                  console.warn("Erro ao obter endereço:", e);
+                  setLocation(prev => prev ? { ...prev, lat: latitude, lon: longitude } : { lat: latitude, lon: longitude, address: "Localização Atual" });
+                }
+              } else {
+                // Apenas atualiza as coordenadas sem chamar a API de endereço
                 setLocation(prev => prev ? { ...prev, lat: latitude, lon: longitude } : { lat: latitude, lon: longitude, address: "Localização Atual" });
               }
-            } else {
-              // Apenas atualiza as coordenadas sem chamar a API de endereço
-              setLocation(prev => prev ? { ...prev, lat: latitude, lon: longitude } : { lat: latitude, lon: longitude, address: "Localização Atual" });
             }
-          }
-        },
-        (error) => {
-          console.error("Erro ao rastrear localização:", error);
-          setGpsStatus('warning');
-          if (error.code === error.TIMEOUT) {
-            console.log("Reiniciando rastreamento de localização devido a timeout...");
-            navigator.geolocation.clearWatch(watchId);
-            setTimeout(startWatching, 5000);
-          }
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-      );
+          },
+          (error) => {
+            console.warn("Rastreamento de localização (Aviso):", error.message || error);
+            setGpsStatus('warning');
+            
+            // Se falhou com alta precisão, desative e tente novamente com baixa precisão
+            if (highAccuracy) {
+              console.log("Alta precisão falhou no rastreamento. Tentando precisão balanceada...");
+              highAccuracy = false;
+              if (watchId) navigator.geolocation.clearWatch(watchId);
+              fallbackTimer = setTimeout(startWatching, 2000);
+              return;
+            }
+
+            if (error.code === error.PERMISSION_DENIED) {
+              console.log("Permissão de geolocalização negada pelo usuário.");
+              if (watchId) navigator.geolocation.clearWatch(watchId);
+              // Define uma localização inicial de fallback padrão para o mapa funcionar
+              if (!location) {
+                setLocation({ lat: -23.5505, lon: -46.6333, address: "São Paulo, SP" });
+              }
+              return;
+            }
+            
+            if (error.code === error.TIMEOUT) {
+              console.log("Reiniciando rastreamento de localização devido a timeout...");
+              if (watchId) navigator.geolocation.clearWatch(watchId);
+              fallbackTimer = setTimeout(startWatching, 5000);
+            }
+          },
+          { enableHighAccuracy: highAccuracy, timeout: 15000, maximumAge: 15000 }
+        );
+      } catch (e) {
+        console.warn("Não foi possível iniciar watchPosition:", e);
+      }
     };
 
     startWatching();
-    return () => navigator.geolocation.clearWatch(watchId);
+    return () => {
+      if (watchId) navigator.geolocation.clearWatch(watchId);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+    };
   }, []);
 
   // Monitoramento do modelo local
@@ -557,7 +608,6 @@ const App: React.FC = () => {
     };
     initApp();
   }, [user?.id]);
-
   const openInNativeMaps = (lat: number, lon: number) => {
     const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
     window.open(url, '_blank');
@@ -768,6 +818,21 @@ const App: React.FC = () => {
         <div style="position: relative; width: 24px; height: 24px;">
           <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 10px; height: 10px; background-color: #ef4444; border: 1.5px solid white; border-radius: 50%; box-shadow: 0 0 6px rgba(239, 68, 68, 0.5); z-index: 2;"></div>
           <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 18px; height: 18px; background-color: #ef4444; border-radius: 50%; opacity: 0.2; animation: pulse 2s infinite; z-index: 1;"></div>
+        </div>
+      `,
+      iconSize: [24, 24],
+      iconAnchor: [12, 12]
+    });
+  }, []);
+
+  const bpfIcon = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    return L.divIcon({
+      className: 'custom-bpf-marker',
+      html: `
+        <div style="position: relative; width: 24px; height: 24px;">
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 10px; height: 10px; background-color: #3b82f6; border: 1.5px solid white; border-radius: 50%; box-shadow: 0 0 6px rgba(59, 130, 246, 0.5); z-index: 2;"></div>
+          <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 18px; height: 18px; background-color: #3b82f6; border-radius: 50%; opacity: 0.2; animation: pulse 2s infinite; z-index: 1;"></div>
         </div>
       `,
       iconSize: [24, 24],
@@ -1022,8 +1087,21 @@ const App: React.FC = () => {
     
     // Detecta se é dispositivo móvel para otimizar memória
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    const captureWidth = 1200; // Aumentado para 1200px para base de pixels muito maior
-    const captureScale = 5; // Aumentado para 5x para ultra-definição extrema
+    // Largura de captura otimizada para nitidez e estabilidade
+    const captureWidth = 1200; 
+    
+    // Escala base para o relatório (texto e gráficos)
+    // No mobile, usamos 1.5x para garantir nitidez sem estourar memória
+    let reportScale = isMobile ? 1.5 : 2.0;
+    const estimatedHeight = element.offsetHeight || 5000;
+    
+    // Limite de segurança para mobile: ~15M pixels totais
+    const maxPixels = isMobile ? 15000000 : 40000000;
+    const currentPixels = captureWidth * estimatedHeight * reportScale;
+    
+    if (currentPixels > maxPixels) {
+      reportScale = Math.sqrt(maxPixels / (captureWidth * estimatedHeight));
+    }
 
     const originalStyle = {
       width: element.style.width,
@@ -1045,7 +1123,7 @@ const App: React.FC = () => {
       element.style.width = `${captureWidth}px`;
       element.style.maxWidth = 'none';
       element.style.height = 'auto';
-      element.style.position = 'fixed';
+      element.style.position = 'absolute';
       element.style.left = '0';
       element.style.top = '0';
       element.style.zIndex = '-9999';
@@ -1055,17 +1133,97 @@ const App: React.FC = () => {
       element.style.backgroundColor = '#ffffff';
       element.style.overflow = 'visible';
       
-      // Aguarda renderização completa (especialmente do mapa e imagens)
-      await new Promise(r => setTimeout(r, isMobile ? 8000 : 6000));
+      // Função auxiliar para garantir que todas as imagens estão carregadas
+      const waitForImages = async (el: HTMLElement) => {
+        const images = Array.from(el.getElementsByTagName('img'));
+        await Promise.all(images.map(img => {
+          if (img.complete) return Promise.resolve();
+          return new Promise(resolve => {
+            img.onload = resolve;
+            img.onerror = resolve;
+          });
+        }));
+      };
+
+      await waitForImages(element);
       
+      // Aguarda renderização completa (especialmente do mapa e gráficos)
+      await new Promise(r => setTimeout(r, isMobile ? 15000 : 10000));
+      
+      // ESTRATÉGIA SÊNIOR: Captura o mapa separadamente em ALTA RESOLUÇÃO (3x)
+      // Usamos toPng para o mapa pois ele captura melhor os tiles do Leaflet e marcadores.
+      let highResMapImage = null;
+      try {
+        const mapArea = element.querySelector('#report-map-capture-area');
+        if (mapArea) {
+          // Garante que o mapa tenha altura fixa antes de capturar
+          const originalMapHeight = (mapArea as HTMLElement).style.height;
+          (mapArea as HTMLElement).style.height = '500px';
+          (mapArea as HTMLElement).style.width = '1200px';
+          
+          highResMapImage = await toPng(mapArea as HTMLElement, {
+            quality: 1.0,
+            pixelRatio: 3,
+            backgroundColor: '#ffffff',
+            cacheBust: true,
+            width: 1200,
+            height: 500
+          });
+          
+          (mapArea as HTMLElement).style.height = originalMapHeight;
+          (mapArea as HTMLElement).style.width = '';
+          // Pequena pausa para o navegador liberar memória antes da captura principal
+          await new Promise(r => setTimeout(r, isMobile ? 1000 : 500));
+        }
+      } catch (e) {
+        console.warn("Falha na captura de alta resolução do mapa:", e);
+      }
+
       let canvas;
       try {
-        // Tenta toPng primeiro (mais leve no mobile se configurado corretamente)
+        const captureHeight = Math.max(element.offsetHeight, element.scrollHeight);
+        // Captura o relatório completo com a escala base estável
+        canvas = await html2canvas(element, {
+          useCORS: true,
+          allowTaint: false,
+          scale: reportScale,
+          backgroundColor: '#ffffff',
+          logging: false,
+          width: captureWidth,
+          height: captureHeight,
+          windowWidth: captureWidth,
+          windowHeight: captureHeight,
+          imageTimeout: 0,
+          onclone: (clonedDoc) => {
+            clonedDoc.body.style.backgroundColor = '#ffffff';
+            const el = clonedDoc.querySelector('[data-report-container]');
+            if (el) {
+              (el as HTMLElement).style.display = 'block';
+              (el as HTMLElement).style.visibility = 'visible';
+              (el as HTMLElement).style.opacity = '1';
+              (el as HTMLElement).style.width = `${captureWidth}px`;
+              (el as HTMLElement).style.height = 'auto';
+              (el as HTMLElement).style.position = 'relative';
+            }
+            
+            // INJEÇÃO SÊNIOR: Substitui o mapa renderizado pela captura de ALTA RESOLUÇÃO
+            if (highResMapImage) {
+              const clonedMapArea = clonedDoc.querySelector('#report-map-capture-area');
+              if (clonedMapArea) {
+                clonedMapArea.innerHTML = `<img src="${highResMapImage}" style="width:100%;height:500px;object-fit:cover;display:block;" />`;
+                (clonedMapArea as HTMLElement).style.height = '500px';
+                (clonedMapArea as HTMLElement).style.minHeight = '500px';
+              }
+            }
+          }
+        });
+      } catch (e) {
+        console.warn("html2canvas falhou, tentando toPng como fallback:", e);
         const dataUrl = await toPng(element, {
           quality: 1.0,
           backgroundColor: '#ffffff',
-          pixelRatio: captureScale,
-          cacheBust: false, // Desativado para evitar problemas de CORS
+          pixelRatio: reportScale,
+          cacheBust: true,
           skipFonts: false,
         });
         
@@ -1075,7 +1233,6 @@ const App: React.FC = () => {
         await new Promise((resolve, reject) => {
           img.onload = resolve;
           img.onerror = reject;
-          setTimeout(reject, 10000); // Timeout de 10s
         });
         
         canvas = document.createElement('canvas');
@@ -1087,27 +1244,6 @@ const App: React.FC = () => {
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(img, 0, 0);
         }
-      } catch (e) {
-        console.warn("toPng falhou, tentando html2canvas:", e);
-        // Fallback para html2canvas
-        canvas = await html2canvas(element, {
-          useCORS: true,
-          allowTaint: true,
-          scale: captureScale,
-          backgroundColor: '#ffffff',
-          logging: false,
-          width: captureWidth,
-          height: element.offsetHeight,
-          onclone: (clonedDoc) => {
-            const el = clonedDoc.querySelector('[data-report-container]');
-            if (el) {
-              (el as HTMLElement).style.display = 'block';
-              (el as HTMLElement).style.visibility = 'visible';
-              (el as HTMLElement).style.opacity = '1';
-              (el as HTMLElement).style.width = `${captureWidth}px`;
-            }
-          }
-        });
       }
 
       if (!canvas) throw new Error("Falha ao criar canvas do relatório.");
@@ -1131,9 +1267,9 @@ const App: React.FC = () => {
         format: [pageWidth, finalHeight]
       });
 
-      // Qualidade máxima para garantir visibilidade total
-      const imgQuality = 1.0;
-      dynamicPdf.addImage(canvas.toDataURL('image/jpeg', imgQuality), 'JPEG', 0, 0, pageWidth, finalHeight, undefined, isMobile ? 'MEDIUM' : 'SLOW');
+      // Usamos JPEG com qualidade 0.85 para mobile para reduzir o peso na memória durante a conversão
+      const imgData = canvas.toDataURL(isMobile ? 'image/jpeg' : 'image/png', isMobile ? 0.85 : 1.0);
+      dynamicPdf.addImage(imgData, isMobile ? 'JPEG' : 'PNG', 0, 0, pageWidth, finalHeight, undefined, 'FAST');
       
       const fileName = `Relatorio_PestScan_${Date.now()}.pdf`;
       const pdfBlob = dynamicPdf.output('blob');
@@ -1529,6 +1665,45 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSearchAddress = async (query: string) => {
+    if (!query || query.trim().length < 3) {
+      showToast("Digite pelo menos 3 caracteres para buscar.", "info");
+      return;
+    }
+    setIsSearchingAddress(true);
+    showToast("Buscando endereço...", "info");
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`, {
+        headers: { 'User-Agent': 'PestScanPro/1.0 (juan.terra53@gmail.com)' },
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.length > 0) {
+          const lat = parseFloat(data[0].lat);
+          const lon = parseFloat(data[0].lon);
+          
+          // Agora faz um reverse geocoding para pegar no formato de alta precisão que criamos
+          const address = await getReverseGeocoding(lat, lon);
+          setLocation({ lat, lon, address });
+          setGpsStatus('active');
+          setShouldFollowUser(true);
+          setMapKey(k => k + 1);
+          showToast("Localização encontrada e definida!", "success");
+        } else {
+          showToast("Nenhum local encontrado para esta busca.", "info");
+        }
+      } else {
+        throw new Error("Search failed");
+      }
+    } catch (e) {
+      console.error("Erro ao buscar endereço:", e);
+      showToast("Não foi possível buscar o endereço.", "error");
+    } finally {
+      setIsSearchingAddress(false);
+    }
+  };
+
   const lastGeocodeTimeRef = useRef<number>(0);
 
   const getReverseGeocoding = async (lat: number, lon: number): Promise<string> => {
@@ -1540,8 +1715,8 @@ const App: React.FC = () => {
     lastGeocodeTimeRef.current = now;
 
     try {
-      // TENTATIVA 1: Nominatim (OpenStreetMap)
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=14`, {
+      // TENTATIVA 1: Nominatim (OpenStreetMap) com Zoom 18 para alta precisão de rua/bairro
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18`, {
         headers: { 'User-Agent': 'PestScanPro/1.0 (juan.terra53@gmail.com)' },
         signal: AbortSignal.timeout(5000) // Timeout de 5s
       });
@@ -1549,9 +1724,35 @@ const App: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         if (data.address) {
-          const city = data.address.city || data.address.town || data.address.village || data.address.municipality || data.address.city_district || data.address.suburb || data.address.hamlet || data.address.county || "Cidade Desconhecida";
-          const state = data.address.state || "";
-          return `${city}${state ? `, ${state}` : ""}`;
+          const road = data.address.road;
+          const houseNumber = data.address.house_number;
+          const suburb = data.address.suburb || data.address.neighbourhood || data.address.city_district;
+          const city = data.address.city || data.address.town || data.address.village || data.address.municipality;
+          const state = data.address.state;
+          
+          let addressParts = [];
+          if (road) {
+            addressParts.push(houseNumber ? `${road}, ${houseNumber}` : road);
+          }
+          if (suburb) {
+            addressParts.push(suburb);
+          }
+          if (city) {
+            if (state) {
+              // Simplifica nome do estado se possível (ex: Estado de São Paulo -> SP se for igual ao código)
+              const stateAbbr = state.length > 25 ? "" : state;
+              addressParts.push(`${city}${stateAbbr ? ` - ${stateAbbr}` : ""}`);
+            } else {
+              addressParts.push(city);
+            }
+          } else if (state) {
+            addressParts.push(state);
+          }
+          
+          if (addressParts.length > 0) {
+            return addressParts.join(', ');
+          }
+          return data.display_name || "Localização Atual";
         }
       }
       throw new Error("Nominatim failed");
@@ -1566,8 +1767,24 @@ const App: React.FC = () => {
         
         if (res.ok) {
           const data = await res.json();
-          const city = data.city || data.locality || data.principalSubdivision || "Cidade Desconhecida";
-          const state = data.principalSubdivisionCode?.split('-')[1] || "";
+          const road = data.localityInfo?.informative?.find((i: any) => i.order === 6 || i.order === 7 || i.order === 8)?.name;
+          const suburb = data.localityInfo?.informative?.find((i: any) => i.order === 5)?.name;
+          const city = data.city || data.locality || "Cidade Desconhecida";
+          const state = data.principalSubdivisionCode?.split('-')[1] || data.principalSubdivision || "";
+          
+          let parts = [];
+          if (road) parts.push(road);
+          if (suburb) parts.push(suburb);
+          if (city) {
+            if (state) {
+              parts.push(`${city} - ${state}`);
+            } else {
+              parts.push(city);
+            }
+          }
+          if (parts.length > 0) {
+            return parts.join(', ');
+          }
           return `${city}${state ? `, ${state}` : ""}`;
         }
       } catch (fallbackErr) {
@@ -1932,71 +2149,78 @@ const App: React.FC = () => {
 
       let res: RecognitionResult;
 
-      // --- MOTOR HÍBRIDO SÊNIOR OTIMIZADO ---
-      // Executa primeiro o modo padrão (2 - Raw) que é o mais estável
-      let results: RecognitionResult[] = [];
-      const resMode2 = await analyzeOffline(canvas, 2);
-      results.push(resMode2);
-      
-      // Só tenta outros modos se a confiança for baixa (< 80%)
-      if (!resMode2.pestFound || resMode2.confidence < 0.80) {
-        for (let i of [0, 1]) {
-          const resMode = await analyzeOffline(canvas, i);
-          results.push(resMode);
-          if (resMode.pestFound && resMode.confidence > 0.85) break;
+      if (scanMode === 'bpf') {
+        res = await analyzeBpfImage(base64, canvas, normMode);
+        if (res.pest) {
+          res.pestFound = true;
         }
-      }
-      
-      const localRes = results.sort((a, b) => b.confidence - a.confidence)[0];
-      setNormMode(localRes.normalizationMode || 0);
-      
-      // --- ECONOMIA DE API (BUSCA NO BANCO) ---
-      if (localRes.pestFound && localRes.confidence > 0.60 && localRes.pest) {
-        console.log(`[Economy] Buscando referência no banco para: ${localRes.pest.name}`);
+      } else {
+        // --- MOTOR HÍBRIDO SÊNIOR OTIMIZADO ---
+        // Executa primeiro o modo padrão (2 - Raw) que é o mais estável
+        let results: RecognitionResult[] = [];
+        const resMode2 = await analyzeOffline(canvas, 2);
+        results.push(resMode2);
         
-        // Busca otimizada: tenta encontrar qualquer registro que contenha o nome da praga no JSONB
-        const { data: existingData, error: searchError } = await supabase
-          .from('pest_detections')
-          .select('analysis_result')
-          .ilike('analysis_result->pest->name', `%${localRes.pest.name}%`)
-          .not('analysis_result', 'is', null)
-          .limit(1);
+        // Só tenta outros modos se a confiança for baixa (< 80%)
+        if (!resMode2.pestFound || resMode2.confidence < 0.80) {
+          for (let i of [0, 1]) {
+            const resMode = await analyzeOffline(canvas, i);
+            results.push(resMode);
+            if (resMode.pestFound && resMode.confidence > 0.85) break;
+          }
+        }
+        
+        const localRes = results.sort((a, b) => b.confidence - a.confidence)[0];
+        setNormMode(localRes.normalizationMode || 0);
+        
+        // --- ECONOMIA DE API (BUSCA NO BANCO) ---
+        if (localRes.pestFound && localRes.confidence > 0.60 && localRes.pest) {
+          console.log(`[Economy] Buscando referência no banco para: ${localRes.pest.name}`);
+          
+          // Busca otimizada: tenta encontrar qualquer registro que contenha o nome da praga no JSONB
+          const { data: existingData, error: searchError } = await supabase
+            .from('pest_detections')
+            .select('analysis_result')
+            .ilike('analysis_result->pest->name', `%${localRes.pest.name}%`)
+            .not('analysis_result', 'is', null)
+            .limit(1);
 
-        if (searchError) console.warn("[Economy] Erro na busca de cache:", searchError);
+          if (searchError) console.warn("[Economy] Erro na busca de cache:", searchError);
 
-        if (existingData && existingData.length > 0) {
-          const cachedResult = typeof existingData[0].analysis_result === 'string' 
-            ? JSON.parse(existingData[0].analysis_result) 
-            : existingData[0].analysis_result;
+          if (existingData && existingData.length > 0) {
+            const cachedResult = typeof existingData[0].analysis_result === 'string' 
+              ? JSON.parse(existingData[0].analysis_result) 
+              : existingData[0].analysis_result;
 
-          if (cachedResult && cachedResult.pestFound) {
-            console.log("✅ [History] Usando ficha técnica do banco de dados.");
-            res = {
-              ...cachedResult,
-              confidence: localRes.confidence,
-              message: `Identificado via Referência Local (${localRes.pest.name})`,
-              source: 'Banco de Dados',
-              capturedImage: undefined
-            };
+            if (cachedResult && cachedResult.pestFound) {
+              console.log("✅ [History] Usando ficha técnica do banco de dados.");
+              res = {
+                ...cachedResult,
+                confidence: localRes.confidence,
+                message: `Identificado via Referência Local (${localRes.pest.name})`,
+                source: 'Banco de Dados',
+                capturedImage: undefined
+              };
+            } else {
+              res = await analyzePestImage(base64, canvas, normMode);
+            }
           } else {
             res = await analyzePestImage(base64, canvas, normMode);
           }
         } else {
           res = await analyzePestImage(base64, canvas, normMode);
         }
-      } else {
-        res = await analyzePestImage(base64, canvas, normMode);
-      }
 
-      const isConnectionError = res.message?.includes("Erro de Conexão") || res.message?.includes("Failed to fetch");
-      if ((isConnectionError || (!res.pestFound && localRes.confidence > 0.85)) && localRes.pestFound) {
-        res = {
-          ...localRes,
-          pestFound: true,
-          message: isConnectionError 
-            ? `Conexão instável. Usando IA Local: ${localRes.message}` 
-            : `IA Local (Alta Confiança): ${localRes.message}`
-        };
+        const isConnectionError = res.message?.includes("Erro de Conexão") || res.message?.includes("Failed to fetch");
+        if ((isConnectionError || (!res.pestFound && localRes.confidence > 0.85)) && localRes.pestFound) {
+          res = {
+            ...localRes,
+            pestFound: true,
+            message: isConnectionError 
+              ? `Conexão instável. Usando IA Local: ${localRes.message}` 
+              : `IA Local (Alta Confiança): ${localRes.message}`
+          };
+        }
       }
 
       // Aguarda a localização (se ainda não terminou)
@@ -2161,41 +2385,48 @@ const App: React.FC = () => {
 
       let res: RecognitionResult;
 
-      // --- ECONOMIA DE API PARA UPLOAD ---
-      if (localRes.pestFound && localRes.confidence > 0.60 && localRes.pest) {
-        console.log(`[Economy] Buscando referência no banco para: ${localRes.pest.name}`);
-        const { data: existingData, error: searchError } = await supabase
-          .from('pest_detections')
-          .select('analysis_result')
-          .ilike('analysis_result->pest->name', `%${localRes.pest.name}%`)
-          .not('analysis_result', 'is', null)
-          .limit(1);
+      if (scanMode === 'bpf') {
+        res = await analyzeBpfImage(resizedBase64, canvas, localRes?.normalizationMode || 0);
+        if (res.pest) {
+          res.pestFound = true;
+        }
+      } else {
+        // --- ECONOMIA DE API PARA UPLOAD ---
+        if (localRes.pestFound && localRes.confidence > 0.60 && localRes.pest) {
+          console.log(`[Economy] Buscando referência no banco para: ${localRes.pest.name}`);
+          const { data: existingData, error: searchError } = await supabase
+            .from('pest_detections')
+            .select('analysis_result')
+            .ilike('analysis_result->pest->name', `%${localRes.pest.name}%`)
+            .not('analysis_result', 'is', null)
+            .limit(1);
 
-        if (searchError) console.warn("[Economy] Erro na busca de cache (Upload):", searchError);
+          if (searchError) console.warn("[Economy] Erro na busca de cache (Upload):", searchError);
 
-        if (existingData && existingData.length > 0) {
-          const cachedResult = typeof existingData[0].analysis_result === 'string' 
-            ? JSON.parse(existingData[0].analysis_result) 
-            : existingData[0].analysis_result;
+          if (existingData && existingData.length > 0) {
+            const cachedResult = typeof existingData[0].analysis_result === 'string' 
+              ? JSON.parse(existingData[0].analysis_result) 
+              : existingData[0].analysis_result;
 
-          if (cachedResult && cachedResult.pestFound) {
-            console.log("✅ [History] Usando ficha técnica do banco de dados.");
-            res = {
-              ...cachedResult,
-              confidence: localRes.confidence,
-              location: { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address },
-              message: "Ficha técnica otimizada (Cache)",
-              source: 'Banco de Dados',
-              capturedImage: undefined
-            };
+            if (cachedResult && cachedResult.pestFound) {
+              console.log("✅ [History] Usando ficha técnica do banco de dados.");
+              res = {
+                ...cachedResult,
+                confidence: localRes.confidence,
+                location: { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address },
+                message: "Ficha técnica otimizada (Cache)",
+                source: 'Banco de Dados',
+                capturedImage: undefined
+              };
+            } else {
+              res = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
+            }
           } else {
             res = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
           }
         } else {
           res = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
         }
-      } else {
-        res = await analyzePestImage(resizedBase64, canvas, localRes.normalizationMode);
       }
 
       res.location = { latitude: validatedLoc.lat, longitude: validatedLoc.lon, address: validatedLoc.address };
@@ -2733,21 +2964,103 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {view === 'camera' && (
-          <div className="flex flex-col items-center">
-             <div className="mb-6 flex flex-wrap justify-center gap-3">
-                <div className="flex items-center gap-3 px-5 py-2.5 bg-white/80 rounded-2xl border border-slate-100 shadow-sm">
-                   <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-                   <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                     Motor Local: {modelStatus}
-                   </span>
+         {view === 'camera' && (
+          <div className="flex flex-col items-center w-full">
+             <div className="mb-6 w-full max-w-md flex flex-col gap-3 px-4">
+                <div className="flex flex-wrap justify-center gap-2">
+                   <div className="flex items-center gap-2 px-4 py-2 bg-white/80 rounded-2xl border border-slate-100 shadow-sm">
+                      <div className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                      <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">
+                        Motor Local: {modelStatus}
+                      </span>
+                   </div>
+                   {!isOnline && (
+                     <div className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-2xl shadow-sm animate-pulse">
+                        <WifiOff size={12} />
+                        <span className="text-[9px] font-black uppercase tracking-widest">Offline</span>
+                     </div>
+                   )}
                 </div>
-                {!isOnline && (
-                  <div className="flex items-center gap-3 px-5 py-2.5 bg-red-500 text-white rounded-2xl shadow-sm animate-pulse">
-                     <WifiOff size={14} />
-                     <span className="text-[10px] font-black uppercase tracking-widest">Offline</span>
+                
+                <div className="bg-white/95 backdrop-blur-sm p-4 rounded-3xl border border-slate-100 shadow-md flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-slate-400">
+                      <MapPin size={14} className="text-emerald-500 animate-bounce" />
+                      <span className="text-[9px] font-black uppercase tracking-widest">Localização Atual</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setManualAddressInput(location?.address || '');
+                        setIsEditingAddress(prev => !prev);
+                      }}
+                      className="text-[9px] font-black uppercase tracking-widest text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-xl transition-all"
+                    >
+                      {isEditingAddress ? "Cancelar" : "Corrigir Texto"}
+                    </button>
                   </div>
-                )}
+                  
+                  {isEditingAddress ? (
+                    <div className="flex items-center gap-2 mt-1">
+                      <input
+                        type="text"
+                        value={manualAddressInput}
+                        onChange={(e) => setManualAddressInput(e.target.value)}
+                        placeholder="Digite o endereço exato..."
+                        className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-emerald-500 focus:bg-white"
+                        autoFocus
+                      />
+                      <button
+                        onClick={() => {
+                          if (manualAddressInput.trim()) {
+                            setLocation(prev => ({
+                              lat: prev?.lat || -23.5505,
+                              lon: prev?.lon || -46.6333,
+                              address: manualAddressInput.trim()
+                            }));
+                            setIsEditingAddress(false);
+                            showToast("Endereço corrigido com sucesso!", "success");
+                          }
+                        }}
+                        className="px-3 py-2 bg-emerald-500 text-white rounded-xl hover:bg-emerald-600 font-bold text-xs transition-all"
+                      >
+                        Salvar
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100 shadow-inner flex flex-col gap-1 text-center">
+                      <p className="text-xs font-bold text-slate-700 line-clamp-1">
+                        {location?.address || "Obtendo GPS..."}
+                      </p>
+                      <p className="text-[8px] font-mono text-slate-400">
+                        {location ? `Coordenadas: ${location.lat.toFixed(6)}, ${location.lon.toFixed(6)}` : ""}
+                      </p>
+                    </div>
+                  )}
+                </div>
+             </div>
+
+             {/* Seletor de Modo de Escaneamento */}
+             <div className="w-full max-w-sm mb-6 bg-slate-100 p-1.5 rounded-3xl flex gap-1 shadow-inner">
+               <button
+                 onClick={() => setScanMode('pest')}
+                 className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all ${
+                   scanMode === 'pest'
+                     ? 'bg-emerald-500 text-white shadow-md'
+                     : 'text-slate-500 hover:text-slate-800'
+                 }`}
+               >
+                 Controle de Pragas
+               </button>
+               <button
+                 onClick={() => setScanMode('bpf')}
+                 className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all ${
+                   scanMode === 'bpf'
+                     ? 'bg-blue-500 text-white shadow-md'
+                     : 'text-slate-500 hover:text-slate-800'
+                 }`}
+               >
+                 Não Conformidade / BPF
+               </button>
              </div>
 
              <div 
@@ -2768,17 +3081,17 @@ const App: React.FC = () => {
                 />
                 
                 <div className="absolute top-6 left-6 flex gap-3 z-50">
-                  <button 
-                    onClick={() => {
-                      if (fileInputRef.current) {
-                        fileInputRef.current.value = '';
-                        fileInputRef.current.click();
-                      }
-                    }}
-                    className="p-5 rounded-2xl bg-black/40 text-white border border-white/20 transition-all active:scale-90"
-                  >
-                    <ImageIcon size={24} />
-                  </button>
+                    <button 
+                      onClick={() => {
+                        if (fileInputRef.current) {
+                          fileInputRef.current.value = '';
+                          fileInputRef.current.click();
+                        }
+                      }}
+                      className="p-5 rounded-2xl bg-black/40 text-white border border-white/20 transition-all active:scale-90"
+                    >
+                      <ImageIcon size={24} />
+                    </button>
                   <input 
                     key={fileInputKey}
                     type="file" 
@@ -2801,9 +3114,9 @@ const App: React.FC = () => {
                 )}
 
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                   <div className="w-4/5 h-4/5 border-2 border-emerald-400/30 rounded-[3rem] relative">
-                      <div className="absolute top-0 left-0 w-12 h-12 border-t-4 border-l-4 border-emerald-400 rounded-tl-2xl" />
-                      <div className="absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 border-emerald-400 rounded-br-2xl" />
+                   <div className={`w-4/5 h-4/5 border-2 rounded-[3rem] relative ${scanMode === 'bpf' ? 'border-blue-400/30' : 'border-emerald-400/30'}`}>
+                      <div className={`absolute top-0 left-0 w-12 h-12 border-t-4 border-l-4 rounded-tl-2xl ${scanMode === 'bpf' ? 'border-blue-400' : 'border-emerald-400'}`} />
+                      <div className={`absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 rounded-br-2xl ${scanMode === 'bpf' ? 'border-blue-400' : 'border-emerald-400'}`} />
                    </div>
                 </div>
 
@@ -2814,7 +3127,7 @@ const App: React.FC = () => {
                 )}
              </div>
              <p className="mt-10 text-sm font-bold text-slate-400 px-10 text-center leading-relaxed uppercase tracking-widest text-[10px]">
-               Posicione a praga no centro do visor
+               {scanMode === 'pest' ? 'Posicione a praga no centro do visor' : 'Posicione a não conformidade no centro do visor'}
              </p>
           </div>
         )}
@@ -2883,6 +3196,103 @@ const App: React.FC = () => {
               )}
             </div>
 
+            {/* Barra de Ajuste de Localização e Busca de Endereço */}
+            <div className="mb-6 grid gap-4 bg-slate-50 p-5 rounded-3xl border border-slate-100">
+              {/* Linha 1: Busca de Endereço */}
+              <div className="flex flex-col gap-2">
+                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <Search size={12} className="text-emerald-500" /> Buscar Endereço no Mapa
+                </label>
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSearchAddress(addressSearchQuery);
+                  }}
+                  className="flex gap-2"
+                >
+                  <input
+                    type="text"
+                    value={addressSearchQuery}
+                    onChange={(e) => setAddressSearchQuery(e.target.value)}
+                    placeholder="Ex: Av. Paulista, São Paulo..."
+                    className="flex-1 px-4 py-3 bg-white border-2 border-slate-200 rounded-2xl text-xs font-bold text-slate-800 placeholder:text-slate-300 focus:border-emerald-500 outline-none transition-all shadow-sm"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSearchingAddress}
+                    className="px-5 py-3 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-300 text-white font-black text-[10px] uppercase tracking-widest rounded-2xl shadow-md transition-all shrink-0 active:scale-95 flex items-center gap-1.5"
+                  >
+                    {isSearchingAddress ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Search size={14} />
+                    )}
+                    Buscar
+                  </button>
+                </form>
+              </div>
+
+              {/* Separador */}
+              <div className="h-px bg-slate-200" />
+
+              {/* Linha 2: Localização Resolvida e Edição Manual */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <MapPin size={12} className="text-emerald-500 animate-bounce" /> Endereço Selecionado
+                  </label>
+                  <button
+                    onClick={() => {
+                      setManualAddressInput(location?.address || '');
+                      setIsEditingAddress(prev => !prev);
+                    }}
+                    className="text-[9px] font-black uppercase tracking-widest text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition-all"
+                  >
+                    {isEditingAddress ? "Cancelar" : "Corrigir Texto"}
+                  </button>
+                </div>
+
+                {isEditingAddress ? (
+                  <div className="flex gap-2 mt-1">
+                    <input
+                      type="text"
+                      value={manualAddressInput}
+                      onChange={(e) => setManualAddressInput(e.target.value)}
+                      placeholder="Digite o endereço exato..."
+                      className="flex-1 px-4 py-2.5 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-emerald-500"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => {
+                        if (manualAddressInput.trim()) {
+                          setLocation(prev => ({
+                            lat: prev?.lat || -23.5505,
+                            lon: prev?.lon || -46.6333,
+                            address: manualAddressInput.trim()
+                          }));
+                          setIsEditingAddress(false);
+                          showToast("Endereço corrigido com sucesso!", "success");
+                        }
+                      }}
+                      className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-[10px] uppercase tracking-widest rounded-xl shadow-sm transition-all"
+                    >
+                      Salvar
+                    </button>
+                  </div>
+                ) : (
+                  <div className="bg-white p-3.5 rounded-2xl border border-slate-100 shadow-inner flex flex-col gap-1">
+                    <p className="text-xs font-bold text-slate-700">{location?.address || "Obtendo localização..."}</p>
+                    <p className="text-[9px] font-medium text-slate-400 font-mono">
+                      {location ? `Coordenadas: ${location.lat.toFixed(6)}, ${location.lon.toFixed(6)}` : "Aguardando GPS..."}
+                    </p>
+                    <p className="text-[9.5px] font-bold text-blue-500/80 mt-1 uppercase tracking-wider">
+                      💡 Dica: Você também pode clicar/tocar em qualquer ponto do mapa para definir a posição!
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
                 <div className="w-full h-[400px] rounded-[2.5rem] overflow-hidden border-4 border-slate-50 shadow-inner relative z-10">
                 {/* Manual Refresh Button - Removed extra one for cleaner UI */}
                 <div className="absolute top-4 right-4 z-[2000] flex flex-col gap-2">
@@ -2910,6 +3320,7 @@ const App: React.FC = () => {
                           : [-23.5505, -46.6333]
                     } 
                     zoom={19} 
+                    maxZoom={22}
                     style={{ height: '100%', width: '100%' }}
                     scrollWheelZoom={true}
                   >
@@ -2946,14 +3357,16 @@ const App: React.FC = () => {
                       <TileLayer
                         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        maxZoom={22}
+                        maxNativeZoom={19}
                       />
                     ) : (
                       <TileLayer
-                        attribution='Map data &copy; Google Satellite 2026'
-                        url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&scale=2"
-                        maxZoom={21}
+                        attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                        url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                        maxZoom={22}
+                        maxNativeZoom={19}
                         crossOrigin="anonymous"
-                        detectRetina={true}
                       />
                     )}
                     {(() => {
@@ -2976,6 +3389,9 @@ const App: React.FC = () => {
                         const address = entry.location || entry.result?.location?.address || "Localização Desconhecida";
                         const confidence = typeof entry.result?.confidence === 'number' ? entry.result.confidence : 0;
                         const pestName = entry.result?.pest?.name || 'Scan';
+                        const isBpf = entry.result?.scanType === 'bpf' || entry.result?.pest?.category === 'Não Conformidade' || entry.result?.pest?.category === 'BPF';
+                        const markerIcon = isBpf ? bpfIcon : pestIcon;
+                        const fillColor = isBpf ? '#3b82f6' : (confidence > 0.9 ? '#ef4444' : '#f97316');
                         
                         if (!isValidCoord(lat) || !isValidCoord(lon)) return null;
 
@@ -2986,7 +3402,7 @@ const App: React.FC = () => {
                               center={[lat, lon]}
                               radius={120}
                               pathOptions={{ 
-                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillColor: fillColor,
                                 fillOpacity: 0.01,
                                 color: 'transparent'
                               }}
@@ -2995,7 +3411,7 @@ const App: React.FC = () => {
                               center={[lat, lon]}
                               radius={60}
                               pathOptions={{ 
-                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillColor: fillColor,
                                 fillOpacity: 0.015,
                                 color: 'transparent'
                               }}
@@ -3004,7 +3420,7 @@ const App: React.FC = () => {
                               center={[lat, lon]}
                               radius={30}
                               pathOptions={{ 
-                                fillColor: confidence > 0.9 ? '#ef4444' : '#f97316',
+                                fillColor: fillColor,
                                 fillOpacity: 0.02,
                                 color: 'transparent'
                               }}
@@ -3012,7 +3428,7 @@ const App: React.FC = () => {
                             
                             <Marker
                               position={[lat, lon]}
-                              icon={pestIcon || undefined}
+                              icon={markerIcon || undefined}
                             >
                               <Popup>
                                 <div className="w-48 p-1">
@@ -3286,15 +3702,6 @@ const App: React.FC = () => {
                     <div className="bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl text-emerald-900 text-[9px] font-black shadow-lg border border-emerald-100 uppercase tracking-widest">
                       {currentResult.source}
                     </div>
-                  )}
-                  {currentResult.location && (
-                    <button 
-                      onClick={() => openInNativeMaps(currentResult.location!.latitude, currentResult.location!.longitude)}
-                      className="bg-white/90 backdrop-blur-md p-3 rounded-2xl text-slate-900 shadow-xl border border-white/20 active:scale-95 transition-all flex items-center gap-2"
-                    >
-                      <MapPin size={16} className="text-emerald-500" />
-                      <span className="text-[10px] font-black uppercase tracking-widest">Google Maps</span>
-                    </button>
                   )}
                 </div>
               </div>
@@ -3724,14 +4131,23 @@ const App: React.FC = () => {
                       <h3 className="text-[12px] font-black uppercase flex items-center gap-2" style={{ color: '#94a3b8' }}>
                         <Globe size={14} /> Mapa de Ocorrências (Heatmap)
                       </h3>
-                      <div className="h-[500px] rounded-[2.5rem] overflow-hidden border-4 shadow-inner relative group" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
+                      <div className="mb-10">
+                        <div className="flex items-center gap-3 mb-6">
+                          <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-sm" style={{ backgroundColor: '#f1f5f9' }}>
+                            <Globe size={20} style={{ color: '#064e3b' }} />
+                          </div>
+                          <div>
+                            <h3 className="text-[14px] font-black uppercase tracking-widest" style={{ color: '#064e3b' }}>Localização das Inspeções</h3>
+                            <p className="text-[12px] font-bold" style={{ color: '#64748b' }}>Mapeamento georreferenciado dos pontos identificados</p>
+                          </div>
+                        </div>
+
                         {reportEntries.some(e => e.location && isValidCoord(e.location.latitude)) ? (
-                          <>
+                          <div id="report-map-capture-area" className="w-full h-[500px] rounded-[2.5rem] overflow-hidden border-4 shadow-2xl relative" style={{ borderColor: '#f8fafc', backgroundColor: '#ffffff' }}>
                             {(() => {
                               const validPoints = reportEntries.filter(e => e.location && isValidCoord(e.location.latitude));
                               if (validPoints.length === 0) return null;
                               
-                              // Lógica Sênior: Ajuste dinâmico de enquadramento
                               const lats = validPoints.map(p => p.location!.latitude);
                               const lons = validPoints.map(p => p.location!.longitude);
                               const minLat = Math.min(...lats);
@@ -3742,13 +4158,8 @@ const App: React.FC = () => {
                               const avgLat = lats.reduce((a, b) => a + b, 0) / lats.length;
                               const avgLon = lons.reduce((a, b) => a + b, 0) / lons.length;
                               
-                              // Verifica se os pontos estão muito dispersos (mais de ~200m)
                               const isCluster = (maxLat - minLat) < 0.002 && (maxLon - minLon) < 0.002;
                               
-                              const pointsStr = validPoints.slice(0, 20).map(p => `${p.location!.longitude},${p.location!.latitude},pm2rdm`).join('~');
-                              
-                              // Usamos o Leaflet diretamente no relatório com tiles do Google Satellite
-                              // Isso garante que a planta (fábrica) apareça com a mesma qualidade do mapa principal.
                               const points = validPoints.map(p => ({
                                 latitude: p.location!.latitude,
                                 longitude: p.location!.longitude
@@ -3759,20 +4170,21 @@ const App: React.FC = () => {
                                   <MapContainer 
                                     key={`report-map-${points.length}-${points[0]?.latitude || 0}`}
                                     center={[avgLat, avgLon]}
-                                    zoom={isCluster ? 17 : 15}
+                                    zoom={20}
+                                    maxZoom={22}
                                     style={{ height: '100%', width: '100%' }}
-                                    zoomControl={true}
-                                    dragging={true}
-                                    scrollWheelZoom={true}
-                                    doubleClickZoom={true}
-                                    touchZoom={true}
+                                    zoomControl={false}
+                                    dragging={false}
+                                    scrollWheelZoom={false}
+                                    doubleClickZoom={false}
+                                    touchZoom={false}
                                     attributionControl={false}
                                   >
                                     <TileLayer
-                                      url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&scale=2"
+                                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                                       crossOrigin="anonymous"
-                                      maxZoom={21}
-                                      detectRetina={true}
+                                      maxZoom={22}
+                                      maxNativeZoom={19}
                                     />
                                     <FitBounds points={points} isCluster={isCluster} />
                                     {validPoints.map((p, idx) => {
@@ -3783,22 +4195,9 @@ const App: React.FC = () => {
                                           position={[p.location!.latitude, p.location!.longitude]}
                                           icon={L.divIcon({
                                             className: 'custom-numbered-marker',
-                                            html: `<div style="
-                                              background-color: #ef4444;
-                                              color: white;
-                                              border: 1.5px solid white;
-                                              border-radius: 50%;
-                                              width: 14px;
-                                              height: 14px;
-                                              display: flex;
-                                              align-items: center;
-                                              justify-content: center;
-                                              font-size: 9px;
-                                              font-weight: 900;
-                                              box-shadow: 0 2px 4px rgba(0,0,0,0.4);
-                                            ">${originalIndex + 1}</div>`,
-                                            iconSize: [14, 14],
-                                            iconAnchor: [7, 7]
+                                            html: `<div style="background-color: #ef4444; color: white; border: 2px solid white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 900; box-shadow: 0 3px 6px rgba(0,0,0,0.5);">${originalIndex + 1}</div>`,
+                                            iconSize: [24, 24],
+                                            iconAnchor: [12, 12]
                                           })}
                                         />
                                       );
@@ -3807,9 +4206,9 @@ const App: React.FC = () => {
                                 </div>
                               );
                             })()}
-                          </>
+                          </div>
                         ) : (
-                          <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center" style={{ backgroundColor: '#f8fafc' }}>
+                          <div className="w-full h-[500px] rounded-[2.5rem] overflow-hidden border-4 shadow-inner relative flex flex-col items-center justify-center p-8 text-center" style={{ borderColor: '#f8fafc', backgroundColor: '#f1f5f9' }}>
                             <Globe size={32} style={{ color: '#e2e8f0' }} className="mb-2" />
                             <p className="text-[12px] font-black uppercase tracking-widest leading-tight" style={{ color: '#94a3b8' }}>Localização não disponível</p>
                           </div>
